@@ -1,0 +1,222 @@
+spec_version: 2
+description: Zero-touch onboarding workflow for claiming and preparing Intersight-connected endpoints
+inputs:
+  agent:
+    description: Torque agent that runs the workflow.
+    type: string
+  endpoints:
+    description: Required. JSON array of target definitions. Use single endpoints or same-subnet ranges with start_ip and end_ip.
+    type: string
+    default: "[]"
+  credentials:
+    description: Required. JSON array of the desired endpoint credentials to use for login, connector preparation, and claim.
+    type: string
+    default: "[]"
+  location:
+    description: Optional default location for the endpoint group in this run. Individual endpoints may override it.
+    type: string
+    default: ""
+  organization:
+    description: Optional intended Intersight organization for this onboarding run. In this phase it is carried as workflow context and reported in results.
+    type: string
+    default: ""
+  deployment_name:
+    description: Optional zero-touch deployment name to tag on claimed devices for run traceability.
+    type: string
+    default: ""
+  default_credentials:
+    description: Advanced. Optional JSON array of factory or first-boot credentials used only when password reset or normalization is required.
+    type: string
+    default: "[]"
+  api_key_id:
+    description: Required. Intersight API key ID used for claim submission and verification.
+    type: string
+    default: ""
+  api_private_key:
+    description: Required. PEM-formatted Intersight API private key content.
+    type: string
+    default: ""
+  api_uri:
+    description: Advanced. Intersight API base URI. Keep the default for normal claim runs. For unclaim parity with the UI, a regional endpoint such as https://us-east-1.intersight.com/api/v1 may be required.
+    type: string
+    default: "https://intersight.com/api/v1"
+  destroy_behavior:
+    description: Advanced. Destroy behavior for the final grain. Use noop for the safest default or unclaim_input_targets to attempt endpoint unclaim during destroy.
+    type: string
+    default: "noop"
+  debug_enabled:
+    description: Advanced. Enables more verbose troubleshooting behavior and relaxes some no_log protections. Leave false for normal runs.
+    type: string
+    default: "false"
+grains:
+  validate_target_org:
+    kind: ansible
+    spec:
+      source:
+        store: automation-repo
+        path: infraonboarding/ansible/validate_target_org/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+      inputs:
+        - organization: '{{ .inputs.organization }}'
+        - api_key_id: '{{ .inputs.api_key_id }}'
+        - api_private_key: '{{ .inputs.api_private_key }}'
+        - api_uri: '{{ .inputs.api_uri }}'
+        - validate_certs: 'false'
+        - debug_enabled: '{{ .inputs.debug_enabled }}'
+      outputs:
+        - org_status
+        - org_name
+        - org_action
+        - org_result_json
+  asset_discovery:
+    kind: ansible
+    depends-on: validate_target_org
+    spec:
+      source:
+        store: automation-repo
+        path: infraonboarding/ansible/asset_discovery/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+      inputs:
+        - endpoints: '{{ .inputs.endpoints }}'
+        - credentials: '{{ .inputs.credentials }}'
+        - location: '{{ .inputs.location }}'
+        - organization: '{{ .grains.validate_target_org.outputs.org_name }}'
+        - default_credentials: '{{ .inputs.default_credentials }}'
+        - debug_enabled: '{{ .inputs.debug_enabled }}'
+      outputs:
+        - generated_inventory_yaml
+        - generated_inventory_json
+        - generated_inventory_endpoints_json
+        - discovered_targets_json
+        - discovery_results_json
+        - total_targets
+        - discovered_targets
+        - non_intersight_managed_targets
+        - failed_targets
+  check_and_reset_default_password:
+    kind: ansible
+    depends-on: asset_discovery
+    spec:
+      source:
+        store: automation-repo
+        path: infraonboarding/ansible/check_and_reset_default_password/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+      inputs:
+        - generated_inventory_json: '{{ .grains.asset_discovery.outputs.generated_inventory_json }}'
+        - debug_enabled: '{{ .inputs.debug_enabled }}'
+      outputs:
+        - password_reset_results_json
+        - password_reset_ready_endpoints_json
+        - password_reset_failed_endpoints_json
+        - password_reset_ready_count
+        - password_reset_failed_count
+  device_connector_prepare:
+    kind: ansible
+    depends-on: check_and_reset_default_password
+    spec:
+      source:
+        store: automation-repo
+        path: infraonboarding/ansible/device_connector_prepare/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+      inputs:
+        - generated_inventory_json: '{{ .grains.asset_discovery.outputs.generated_inventory_json }}'
+        - password_reset_ready_endpoints_json: '{{ .grains.check_and_reset_default_password.outputs.password_reset_ready_endpoints_json }}'
+        - debug_enabled: '{{ .inputs.debug_enabled }}'
+      outputs:
+        - connector_prep_results_json
+        - prepared_endpoints_json
+  claim_to_intersight:
+    kind: ansible
+    depends-on: device_connector_prepare
+    spec:
+      source:
+        store: automation-repo
+        path: infraonboarding/ansible/claim_to_intersight/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+      inputs:
+        - generated_inventory_json: '{{ .grains.asset_discovery.outputs.generated_inventory_json }}'
+        - prepared_endpoints_json: '{{ .grains.device_connector_prepare.outputs.prepared_endpoints_json }}'
+        - api_key_id: '{{ .inputs.api_key_id }}'
+        - api_private_key: '{{ .inputs.api_private_key }}'
+        - api_uri: '{{ .inputs.api_uri }}'
+        - organization: '{{ .grains.validate_target_org.outputs.org_name }}'
+        - deployment_name: '{{ .inputs.deployment_name }}'
+        - validate_certs: 'false'
+        - debug_enabled: '{{ .inputs.debug_enabled }}'
+      outputs:
+        - batch_status
+        - successful_endpoints
+        - failed_endpoints
+        - conflict_endpoints
+        - non_intersight_managed_targets
+        - skipped_endpoints
+        - changed_endpoints
+        - results_json
+    on-destroy:
+      - source:
+          store: automation-repo
+          path: infraonboarding/ansible/claim_to_intersight/teardown.yaml
+        inventory-file:
+          localhost:
+            hosts:
+              localhost:
+        inputs:
+          - endpoints: '{{ .inputs.endpoints }}'
+          - credentials: '{{ .inputs.credentials }}'
+          - location: '{{ .inputs.location }}'
+          - organization: '{{ .inputs.organization }}'
+          - default_credentials: '{{ .inputs.default_credentials }}'
+          - api_key_id: '{{ .inputs.api_key_id }}'
+          - api_private_key: '{{ .inputs.api_private_key }}'
+          - api_uri: '{{ .inputs.api_uri }}'
+          - deployment_name: '{{ .inputs.deployment_name }}'
+          - validate_certs: 'false'
+          - destroy_behavior: '{{ .inputs.destroy_behavior }}'
+          - debug_enabled: '{{ .inputs.debug_enabled }}'
+outputs:
+  batch_status:
+    value: '{{ .grains.claim_to_intersight.outputs.batch_status }}'
+  successful_endpoints:
+    value: '{{ .grains.claim_to_intersight.outputs.successful_endpoints }}'
+  failed_endpoints:
+    value: '{{ .grains.claim_to_intersight.outputs.failed_endpoints }}'
+  conflict_endpoints:
+    value: '{{ .grains.claim_to_intersight.outputs.conflict_endpoints }}'
+  non_intersight_managed_targets:
+    value: '{{ .grains.claim_to_intersight.outputs.non_intersight_managed_targets }}'
+  skipped_endpoints:
+    value: '{{ .grains.claim_to_intersight.outputs.skipped_endpoints }}'
+  changed_endpoints:
+    value: '{{ .grains.claim_to_intersight.outputs.changed_endpoints }}'
+  results_json:
+    value: '{{ .grains.claim_to_intersight.outputs.results_json }}'

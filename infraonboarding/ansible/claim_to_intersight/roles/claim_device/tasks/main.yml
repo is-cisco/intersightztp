@@ -1,0 +1,412 @@
+---
+- name: Determine whether host is ready for merged claim flow
+  ansible.builtin.set_fact:
+    endpoint_prepared_context: >-
+      {{
+        (
+          prepared_targets
+          | selectattr('endpoint', 'equalto', (endpoint | default(ansible_host | default(inventory_hostname))))
+          | list
+          | first
+        )
+        | default({}, true)
+      }}
+
+- name: Skip claim submission when host is not prepared
+  ansible.builtin.set_fact:
+    claim_readiness_result:
+      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      organization: "{{ organization | default('') }}"
+      status: skipped
+      changed: false
+      reason: not_ready_after_connector_prepare
+      messages:
+        - Host was not marked ready by device_connector_prepare
+    claim_ready_target_result: {}
+    claim_result:
+      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      organization: "{{ organization | default('') }}"
+      status: skipped
+      changed: false
+      reason: not_ready_after_connector_prepare
+      messages:
+        - Host was not marked ready by device_connector_prepare
+  when: (endpoint_prepared_context | length) == 0
+
+- name: Run merged claim readiness helper for current host
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/tools/run_claim_readiness.py"
+  environment:
+    ENDPOINT: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+    SOURCE_ENTRY_TYPE: "{{ source_entry_type | default('single') }}"
+    LOCATION: "{{ location | default('') }}"
+    DESIRED_CREDENTIALS_JSON: "{{ desired_credentials | default([]) | to_json }}"
+    PREPARED_TARGETS_JSON: "{{ [endpoint_prepared_context] | to_json }}"
+    VALIDATE_CERTS: "{{ (role_endpoint_validate_certs | default(false) | bool) | ternary('true', 'false') }}"
+    TIMEOUT: "{{ role_operation_timeout_seconds | default(20) | string }}"
+  register: claim_readiness_helper_result
+  changed_when: false
+  no_log: "{{ not (role_debug_enabled | default('false') | bool) }}"
+  when: (endpoint_prepared_context | length) > 0
+
+- name: Parse merged claim readiness helper payload
+  ansible.builtin.set_fact:
+    claim_readiness_payload: "{{ claim_readiness_helper_result.stdout | from_json }}"
+  when: (endpoint_prepared_context | length) > 0
+
+- name: Export merged claim readiness helper facts
+  ansible.builtin.set_fact:
+    claim_readiness_result: "{{ claim_readiness_payload.result }}"
+    claim_ready_target_result: "{{ claim_readiness_payload.claim_ready_target | default({}) }}"
+    target_claim_context: "{{ claim_readiness_payload.claim_ready_target | default({}) }}"
+  when: (endpoint_prepared_context | length) > 0
+
+- name: Write claim readiness helper debug artifact
+  ansible.builtin.copy:
+    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_readiness.json"
+    mode: "0600"
+    content: |-
+      {{
+        {
+          'result': (claim_readiness_payload.result | default({})),
+          'claim_ready_target': (
+            (claim_readiness_payload.claim_ready_target | default({}))
+            | combine(
+              {
+                'claim_security_token': (
+                  '<redacted>'
+                  if ((claim_readiness_payload.claim_ready_target | default({})).claim_security_token is defined)
+                  else omit
+                )
+              },
+              recursive=True
+            )
+          )
+        } | to_nice_json
+      }}
+  when:
+    - (endpoint_prepared_context | length) > 0
+    - role_debug_enabled | default('false') | bool
+
+- name: Stop claim submission when merged claim readiness retrieval failed
+  ansible.builtin.set_fact:
+    claim_result: "{{ claim_readiness_result }}"
+  when:
+    - (endpoint_prepared_context | length) > 0
+    - (target_claim_context | default({}) | length) == 0
+
+- name: Record already-claimed target without resubmitting claim
+  ansible.builtin.set_fact:
+    claim_result:
+      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      organization: "{{ organization | default('') }}"
+      device_type: "{{ target_claim_context.device_type | default('unknown') }}"
+      status: already_claimed
+      changed: false
+      reason: already_compliant
+      verification_count: 0
+      verification_failed: false
+      registration_found: false
+      registration_moid: ''
+      messages:
+        - Claim submission was skipped because the connector already reports the endpoint as claimed
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - not (target_claim_context.claim_submission_required | default(true) | bool)
+
+- name: Validate claim submission inputs
+  ansible.builtin.assert:
+    that:
+      - target_claim_context.claim_serial_number is defined
+      - (target_claim_context.claim_serial_number | string | trim | length) > 0
+      - target_claim_context.claim_security_token is defined
+      - (target_claim_context.claim_security_token | string | trim | length) > 0
+    fail_msg: "Claim-ready target is missing claim serial number or security token"
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Submit SaaS device claim
+  intersight_scoped_claim:
+    api_key_id: "{{ role_api_key_id }}"
+    api_private_key: "{{ role_api_private_key }}"
+    api_uri: "{{ role_api_uri }}"
+    validate_certs: "{{ role_validate_certs }}"
+    serial_number: "{{ target_claim_context.claim_serial_number }}"
+    claim_code: "{{ target_claim_context.claim_security_token }}"
+    organization: "{{ organization | default('') }}"
+  register: saas_claim_result
+  failed_when: false
+  no_log: "{{ not (role_debug_enabled | default('false') | bool) }}"
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Derive claim error text
+  ansible.builtin.set_fact:
+    claim_error_text: "{{ (saas_claim_result.msg | default('')) ~ ' ' ~ (saas_claim_result.api_response | default({}) | to_json) }}"
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Write claim submission debug artifact
+  ansible.builtin.copy:
+    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_submission.json"
+    mode: "0600"
+    content: |-
+      {{
+        {
+          'changed': (saas_claim_result.changed | default(false)),
+          'failed': (saas_claim_result.failed | default(false)),
+          'msg': (saas_claim_result.msg | default('')),
+          'api_response': (saas_claim_result.api_response | default({}))
+        } | to_nice_json
+      }}
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+    - role_debug_enabled | default('false') | bool
+
+- name: Derive claim module error state
+  ansible.builtin.set_fact:
+    claim_error_text_lower: "{{ claim_error_text | default('') | lower }}"
+    claim_module_error: >-
+      {{
+        (claim_error_text | default('') | string | trim | length) > 0
+        and (
+          'api error:' in (claim_error_text | default('') | lower)
+          or 'unsupported key:' in (claim_error_text | default('') | lower)
+          or 'private key' in (claim_error_text | default('') | lower)
+          or 'pem' in (claim_error_text | default('') | lower)
+        )
+      }}
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Verify SaaS device registration exists
+  cisco.intersight.intersight_rest_api:
+    api_key_id: "{{ role_api_key_id }}"
+    api_private_key: "{{ role_api_private_key }}"
+    api_uri: "{{ role_api_uri }}"
+    validate_certs: "{{ role_validate_certs }}"
+    resource_path: /asset/DeviceRegistrations
+    query_params:
+      $filter: "Serial eq '{{ target_claim_context.claim_serial_number }}'"
+      $top: 1
+    return_list: true
+  register: saas_registration_result
+  no_log: "{{ not (role_debug_enabled | default('false') | bool) }}"
+  failed_when: false
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+    - not (saas_claim_result.failed | default(false) | bool)
+    - not claim_module_error
+
+- name: Resolve claimed registration Moid
+  ansible.builtin.set_fact:
+    claimed_registration_moid: >-
+      {{
+        (
+          (
+            ((saas_claim_result.api_response | default({})).Device | default({})).Moid
+          )
+          | default('')
+        )
+        or
+        (
+          (
+            (saas_registration_result.api_response | default([]) | first | default({})).Moid
+          )
+          | default('')
+        )
+      }}
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Read claimed registration by Moid
+  cisco.intersight.intersight_rest_api:
+    api_key_id: "{{ role_api_key_id }}"
+    api_private_key: "{{ role_api_private_key }}"
+    api_uri: "{{ role_api_uri }}"
+    validate_certs: "{{ role_validate_certs }}"
+    resource_path: "/asset/DeviceRegistrations/{{ claimed_registration_moid }}"
+    return_list: false
+  register: claimed_registration_detail
+  no_log: "{{ not (role_debug_enabled | default('false') | bool) }}"
+  failed_when: false
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+    - not (saas_claim_result.failed | default(false) | bool)
+    - not claim_module_error
+    - (claimed_registration_moid | default('') | string | trim | length) > 0
+
+- name: Write claimed registration lookup debug artifact
+  ansible.builtin.copy:
+    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_registration_lookup.json"
+    mode: "0600"
+    content: |-
+      {{
+        {
+          'saas_registration_result': (saas_registration_result | default({})),
+          'claimed_registration_detail': (claimed_registration_detail | default({}))
+        } | to_nice_json
+      }}
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+    - role_debug_enabled | default('false') | bool
+
+- name: Resolve zero-touch metadata tags
+  ansible.builtin.set_fact:
+    resolved_location_tag_path: >-
+      {{
+        (target_claim_context.location | default(location | default('')) | string | trim)
+      }}
+    resolved_deployment_name_tag: >-
+      {{
+        (deployment_name | default('') | string | trim)
+      }}
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Apply zero-touch metadata tags to claimed registration
+  cisco.intersight.intersight_rest_api:
+    api_key_id: "{{ role_api_key_id }}"
+    api_private_key: "{{ role_api_private_key }}"
+    api_uri: "{{ role_api_uri }}"
+    validate_certs: "{{ role_validate_certs }}"
+    resource_path: "/asset/DeviceRegistrations/{{ claimed_registration_moid }}"
+    update_method: patch
+    api_body:
+      Tags: >-
+        {{
+          (
+            ((claimed_registration_detail.api_response | default({})).Tags | default([]))
+            | rejectattr('Key', 'equalto', 'cisco_ztp.Location')
+            | rejectattr('Key', 'equalto', 'cisco_ztp.DeploymentName')
+            | list
+          )
+          + ([{'Key': 'cisco_ztp.Location', 'Value': (resolved_location_tag_path | default(''))}] if (resolved_location_tag_path | default('') | length) > 0 else [])
+          + ([{'Key': 'cisco_ztp.DeploymentName', 'Value': (resolved_deployment_name_tag | default(''))}] if (resolved_deployment_name_tag | default('') | length) > 0 else [])
+        }}
+  register: registration_tag_update_result
+  failed_when: false
+  no_log: "{{ not (role_debug_enabled | default('false') | bool) }}"
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+    - not claim_module_error
+    - (claimed_registration_moid | default('') | string | trim | length) > 0
+    - ((resolved_location_tag_path | default('') | string | trim | length) > 0) or ((resolved_deployment_name_tag | default('') | string | trim | length) > 0)
+
+- name: Derive location tag update state
+  ansible.builtin.set_fact:
+    location_tag_update_failed: >-
+      {{
+        (registration_tag_update_result is defined)
+        and (
+          (registration_tag_update_result.failed | default(false) | bool)
+          or ('api error:' in (registration_tag_update_result.msg | default('') | lower))
+        )
+      }}
+    location_tag_update_message: >-
+      {{
+        registration_tag_update_result.msg
+        | default('')
+      }}
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Write registration tag update debug artifact
+  ansible.builtin.copy:
+    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_tag_update.json"
+    mode: "0600"
+    content: "{{ {'registration_tag_update_result': (registration_tag_update_result | default({}))} | to_nice_json }}"
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+    - role_debug_enabled | default('false') | bool
+
+- name: Record SaaS claim result
+  ansible.builtin.set_fact:
+    claim_result:
+      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      organization: "{{ organization | default('') }}"
+      device_type: "{{ target_claim_context.device_type | default('unknown') }}"
+      status: >-
+        {%- if 'already' in claim_error_text_lower and 'claim' in claim_error_text_lower -%}
+        failed
+        {%- elif claim_module_error -%}
+        failed
+        {%- elif (saas_claim_result.failed | default(false) | bool) -%}
+        failed
+        {%- else -%}
+        submitted
+        {%- endif -%}
+      changed: "{{ saas_claim_result.changed | default(false) | bool }}"
+      reason: >-
+        {%- if 'already' in claim_error_text_lower and 'claim' in claim_error_text_lower -%}
+        conflict
+        {%- elif claim_module_error -%}
+        claim_submission_failed
+        {%- elif (saas_claim_result.failed | default(false) | bool) -%}
+        claim_submission_failed
+        {%- else -%}
+        claimed_and_configured
+        {%- endif -%}
+      verification_count: "{{ '1' if (claimed_registration_moid | default('') | string | trim | length) > 0 else '0' }}"
+      verification_failed: >-
+        {{
+          false
+        }}
+      registration_found: "{{ (claimed_registration_moid | default('') | string | trim | length) > 0 }}"
+      registration_moid: "{{ claimed_registration_moid | default('') }}"
+      location_tag_path: "{{ resolved_location_tag_path | default('') }}"
+      location_tag_applied: "{{ (registration_tag_update_result is defined) and not (location_tag_update_failed | default(false) | bool) and ((((resolved_location_tag_path | default('') | string | trim | length) > 0) or ((resolved_deployment_name_tag | default('') | string | trim | length) > 0))) }}"
+      deployment_name_tag: "{{ resolved_deployment_name_tag | default('') }}"
+      location_tag_update_failed: "{{ location_tag_update_failed | default(false) | bool }}"
+      messages:
+        - >-
+          {%- if 'already' in claim_error_text_lower and 'claim' in claim_error_text_lower -%}
+          Intersight reports the device is already claimed.
+          {%- elif claim_module_error -%}
+          {{ saas_claim_result.msg | default('Claim submission failed') }}
+          {%- elif (saas_claim_result.failed | default(false) | bool) -%}
+          {{ saas_claim_result.msg | default('Claim submission failed') }}
+          {%- else -%}
+          Claim submitted successfully and DeviceRegistration was resolved from the claim response.
+          {%- endif -%}
+        - >-
+          {%- if ((resolved_location_tag_path | default('') | string | trim | length) == 0) and ((resolved_deployment_name_tag | default('') | string | trim | length) == 0) -%}
+          No zero-touch metadata tags were requested for this endpoint.
+          {%- elif location_tag_update_failed | default(false) | bool -%}
+          {{ location_tag_update_message | default('Zero-touch metadata tag update failed') }}
+          {%- elif registration_tag_update_result is defined and ((resolved_location_tag_path | default('') | string | trim | length) > 0) and ((resolved_deployment_name_tag | default('') | string | trim | length) > 0) -%}
+          Applied cisco_ztp.Location={{ resolved_location_tag_path }} and cisco_ztp.DeploymentName={{ resolved_deployment_name_tag }}.
+          {%- elif registration_tag_update_result is defined and ((resolved_location_tag_path | default('') | string | trim | length) > 0) -%}
+          Applied cisco_ztp.Location={{ resolved_location_tag_path }}.
+          {%- elif registration_tag_update_result is defined and ((resolved_deployment_name_tag | default('') | string | trim | length) > 0) -%}
+          Applied cisco_ztp.DeploymentName={{ resolved_deployment_name_tag }}.
+          {%- else -%}
+          Zero-touch metadata tagging was not attempted.
+          {%- endif -%}
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - target_claim_context.claim_submission_required | default(true) | bool
+
+- name: Write final per-endpoint claim result debug artifact
+  ansible.builtin.copy:
+    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_result.json"
+    mode: "0600"
+    content: "{{ claim_result | to_nice_json }}"
+  when:
+    - claim_result is defined
+    - role_debug_enabled | default('false') | bool
