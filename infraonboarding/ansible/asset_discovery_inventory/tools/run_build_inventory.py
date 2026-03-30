@@ -7,6 +7,7 @@ import ast
 import ipaddress
 import json
 import os
+import sys
 from typing import Any
 
 import yaml
@@ -38,16 +39,26 @@ def load_json_env(name: str, default: Any) -> Any:
         return normalize_jsonish(ast.literal_eval(value))
 
 
+def fail(message: str) -> None:
+    """Exit with a clear inventory-contract error message."""
+    print(json.dumps({"error": message}))
+    sys.exit(1)
+
+
 def expand_endpoints(endpoints: list[dict[str, Any]], default_location: str = "") -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
-    for item in endpoints:
+    for index, item in enumerate(endpoints, start=1):
         if not isinstance(item, dict):
-            continue
-        endpoint_type = str(item.get("type", "single")).strip().lower()
+            fail(f"endpoints[{index}] must be an object with type single or range")
+
+        endpoint_type = str(item.get("type", "")).strip().lower()
+        if endpoint_type not in {"single", "range"}:
+            fail(f"endpoints[{index}].type must be 'single' or 'range'")
+
         if endpoint_type == "single":
             endpoint = str(item.get("endpoint", "")).strip()
             if not endpoint:
-                continue
+                fail(f"endpoints[{index}].endpoint is required when type is 'single'")
             expanded.append(
                 {
                     "endpoint": endpoint,
@@ -61,11 +72,14 @@ def expand_endpoints(endpoints: list[dict[str, Any]], default_location: str = ""
             start_ip = str(item.get("start_ip", "")).strip()
             end_ip = str(item.get("end_ip", "")).strip()
             if not start_ip or not end_ip:
-                continue
-            start = ipaddress.IPv4Address(start_ip)
-            end = ipaddress.IPv4Address(end_ip)
+                fail(f"endpoints[{index}].start_ip and endpoints[{index}].end_ip are required when type is 'range'")
+            try:
+                start = ipaddress.IPv4Address(start_ip)
+                end = ipaddress.IPv4Address(end_ip)
+            except ipaddress.AddressValueError:
+                fail(f"endpoints[{index}] contains an invalid IPv4 address")
             if int(end) < int(start):
-                continue
+                fail(f"endpoints[{index}].end_ip must be greater than or equal to start_ip")
             for current in range(int(start), int(end) + 1):
                 endpoint = str(ipaddress.IPv4Address(current))
                 expanded.append(
@@ -161,7 +175,10 @@ def build_inventory(
 def main() -> None:
     default_location = str(os.environ.get("LOCATION", "")).strip()
     organization = str(os.environ.get("ORGANIZATION", "")).strip()
-    endpoints = expand_endpoints(load_json_env("ENDPOINTS_JSON", []), default_location=default_location)
+    raw_endpoints = load_json_env("ENDPOINTS_JSON", [])
+    if not isinstance(raw_endpoints, list):
+        fail("endpoints must be a JSON array")
+    endpoints = expand_endpoints(raw_endpoints, default_location=default_location)
     desired_credentials = normalize_credentials(load_json_env("CREDENTIALS_JSON", []))
     default_credentials = normalize_credentials(load_json_env("DEFAULT_CREDENTIALS_JSON", []))
     payload = build_inventory(endpoints, desired_credentials, default_credentials, organization)

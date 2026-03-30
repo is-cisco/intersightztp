@@ -5,7 +5,7 @@ inputs:
     description: Torque agent that runs the workflow.
     type: string
   endpoints:
-    description: Required. JSON array of target definitions. Use single endpoints or same-subnet ranges with start_ip and end_ip.
+    description: Required. JSON array of target definitions. Every item must declare type as single or range. Use endpoint for single entries and start_ip plus end_ip for range entries.
     type: string
     default: "[]"
   credentials:

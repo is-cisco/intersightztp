@@ -10,6 +10,7 @@
     desired_credentials: "{{ endpoint_item.value.desired_credentials | default(inventory_desired_credentials) }}"
     ready_targets: "{{ password_stage_ready_endpoints }}"
     role_debug_enabled: "{{ internal_debug_enabled }}"
+    role_debug_artifact_dir: "{{ debug_artifact_dir }}"
     role_validate_certs: "{{ internal_endpoint_validate_certs }}"
     role_operation_timeout_seconds: "{{ internal_helper_timeout_seconds }}"
 

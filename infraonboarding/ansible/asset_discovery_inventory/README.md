@@ -11,6 +11,10 @@ Production-ready inventory builder grain for the inventory-first Phase 1 workflo
 - `endpoints`
 - `credentials`
 
+`endpoints` must be a JSON array where every item includes:
+- `type: "single"` with `endpoint`
+- or `type: "range"` with `start_ip` and `end_ip`
+
 ## Optional vars
 
 - `default_credentials`
@@ -44,7 +48,7 @@ asset_discovery_inventory:
   kind: ansible
   spec:
     source:
-      store: automation-repo
+      store: intersightztp
       path: infraonboarding/ansible/asset_discovery_inventory/playbook.yaml
     inventory-file:
       localhost:
@@ -62,7 +66,7 @@ asset_discovery_inventory:
       - generated_inventory_endpoints_json
   on-destroy:
     - source:
-        store: automation-repo
+        store: intersightztp
         path: infraonboarding/ansible/asset_discovery_inventory/teardown.yaml
       inventory-file:
         localhost:

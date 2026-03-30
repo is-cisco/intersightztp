@@ -46,9 +46,18 @@
     prepared_target_result: "{{ connector_prepare_payload.prepared_target | default({}) }}"
   when: host_ready_for_connector_prepare
 
+- name: Ensure connector preparation helper debug artifact directory exists
+  ansible.builtin.file:
+    path: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/device_connector_prepare') }}"
+    state: directory
+    mode: "0700"
+  when:
+    - host_ready_for_connector_prepare
+    - role_debug_enabled | default('false') | bool
+
 - name: Write connector preparation helper debug artifact
   ansible.builtin.copy:
-    dest: "/tmp/endpoint_onboarding-debug/device_connector_prepare/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_helper.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/device_connector_prepare') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_helper.json"
     mode: "0600"
     content: "{{ connector_prepare_payload | to_nice_json }}"
   when:

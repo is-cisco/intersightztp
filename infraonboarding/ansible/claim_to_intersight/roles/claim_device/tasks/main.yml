@@ -63,9 +63,18 @@
     target_claim_context: "{{ claim_readiness_payload.claim_ready_target | default({}) }}"
   when: (endpoint_prepared_context | length) > 0
 
+- name: Ensure claim debug artifact directory exists
+  ansible.builtin.file:
+    path: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}"
+    state: directory
+    mode: "0700"
+  when:
+    - (endpoint_prepared_context | length) > 0
+    - role_debug_enabled | default('false') | bool
+
 - name: Write claim readiness helper debug artifact
   ansible.builtin.copy:
-    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_readiness.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_readiness.json"
     mode: "0600"
     content: |-
       {{
@@ -153,7 +162,7 @@
 
 - name: Write claim submission debug artifact
   ansible.builtin.copy:
-    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_submission.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_submission.json"
     mode: "0600"
     content: |-
       {{
@@ -248,7 +257,7 @@
 
 - name: Write claimed registration lookup debug artifact
   ansible.builtin.copy:
-    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_registration_lookup.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_registration_lookup.json"
     mode: "0600"
     content: |-
       {{
@@ -327,7 +336,7 @@
 
 - name: Write registration tag update debug artifact
   ansible.builtin.copy:
-    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_tag_update.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_tag_update.json"
     mode: "0600"
     content: "{{ {'registration_tag_update_result': (registration_tag_update_result | default({}))} | to_nice_json }}"
   when:
@@ -404,7 +413,7 @@
 
 - name: Write final per-endpoint claim result debug artifact
   ansible.builtin.copy:
-    dest: "/tmp/endpoint_onboarding-debug/claim_to_intersight/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_result.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_result.json"
     mode: "0600"
     content: "{{ claim_result | to_nice_json }}"
   when:
