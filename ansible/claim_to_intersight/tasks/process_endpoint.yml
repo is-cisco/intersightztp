@@ -1,0 +1,35 @@
+---
+- name: Run claim role for endpoint
+  ansible.builtin.include_role:
+    name: claim_device
+  vars:
+    endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.value.ansible_host | default(endpoint_item.key)) }}"
+    ansible_host: "{{ endpoint_item.value.ansible_host | default(endpoint_item.value.endpoint | default(endpoint_item.key)) }}"
+    source_entry_type: "{{ endpoint_item.value.source_entry_type | default('single') }}"
+    location: "{{ endpoint_item.value.location | default('') }}"
+    desired_credentials: "{{ endpoint_item.value.desired_credentials | default(inventory_desired_credentials) }}"
+    deployment_name: "{{ internal_deployment_name }}"
+    organization: "{{ internal_organization }}"
+    prepared_targets: "{{ prepared_endpoint_items }}"
+    role_api_key_id: "{{ internal_intersight_api_key_id }}"
+    role_api_private_key: "{{ internal_intersight_api_private_key }}"
+    role_api_uri: "{{ internal_intersight_api_uri }}"
+    role_validate_certs: "{{ internal_intersight_validate_certs }}"
+    role_debug_enabled: "{{ internal_debug_enabled }}"
+    role_debug_artifact_dir: "{{ debug_artifact_dir }}"
+    role_endpoint_validate_certs: "{{ internal_endpoint_validate_certs }}"
+    role_operation_timeout_seconds: "{{ internal_helper_timeout_seconds }}"
+
+- name: Collect claim result for endpoint
+  ansible.builtin.set_fact:
+    claim_results: "{{ claim_results + [claim_result] }}"
+    successful_result_items: >-
+      {{ successful_result_items + ([claim_result] if claim_result.status in ['successful', 'submitted', 'already_claimed'] else []) }}
+    failed_result_items: >-
+      {{ failed_result_items + ([claim_result] if claim_result.status == 'failed' else []) }}
+    conflict_result_items: >-
+      {{ conflict_result_items + ([claim_result] if claim_result.status == 'conflict' else []) }}
+    skipped_result_items: >-
+      {{ skipped_result_items + ([claim_result] if claim_result.status == 'skipped' else []) }}
+    changed_result_items: >-
+      {{ changed_result_items + ([claim_result] if (claim_result.changed | default(false) | bool) else []) }}

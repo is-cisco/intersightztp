@@ -1,0 +1,19 @@
+---
+- name: Run password reset helper for current host
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/tools/run_reset_default_password.py"
+  environment:
+    ENDPOINT: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+    DESIRED_CREDENTIALS_JSON: "{{ desired_credentials | to_json }}"
+    DEFAULT_CREDENTIALS_JSON: "{{ default_credentials | to_json }}"
+    VALIDATE_CERTS: "{{ (validate_certs | default(false) | bool) | ternary('true', 'false') }}"
+    TIMEOUT: "{{ operation_timeout_seconds | default(20) | string }}"
+  register: password_reset_helper_result
+  changed_when: (password_reset_helper_result.stdout | from_json).changed | default(false) | bool
+  no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+
+- name: Parse password reset helper result
+  ansible.builtin.set_fact:
+    password_reset_result: "{{ password_reset_helper_result.stdout | from_json }}"

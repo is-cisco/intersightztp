@@ -1,0 +1,69 @@
+---
+- name: Validate target org
+  hosts: "{{ group | default('localhost') }}"
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    internal_requested_organization: "{{ organization | default('') | string | trim }}"
+  pre_tasks:
+    - name: Install shared Python requirements
+      ansible.builtin.pip:
+        requirements: "{{ playbook_dir }}/../requirements.txt"
+      tags:
+        - always
+        - precheck
+
+    - name: Validate ensure target org inputs
+      ansible.builtin.assert:
+        that:
+          - api_key_id is defined
+          - api_key_id | string | trim | length > 0
+          - api_private_key is defined
+          - api_private_key | string | trim | length > 0
+        fail_msg: "api_key_id and api_private_key are required"
+      no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+      tags:
+        - always
+        - validate
+        - precheck
+  roles:
+    - role: validate_target_org
+      vars:
+        role_requested_organization: "{{ internal_requested_organization }}"
+        role_api_key_id: "{{ api_key_id }}"
+        role_api_private_key: "{{ api_private_key }}"
+        role_api_uri: "{{ api_uri | default('https://intersight.com/api/v1') }}"
+        role_validate_certs: "{{ validate_certs | default(false) | bool }}"
+        role_debug_enabled: "{{ debug_enabled | default('false') }}"
+      tags:
+        - configure
+        - verify
+  post_tasks:
+    - name: Validate ensure target org outputs
+      ansible.builtin.assert:
+        that:
+          - org_status is defined
+          - org_status == 'ready'
+          - org_name is defined
+          - org_action is defined
+          - org_result_json is defined
+          - org_result_json | string | trim | length > 0
+        fail_msg: "validate_target_org did not produce the expected output contract"
+      tags:
+        - always
+        - verify
+
+    - name: Export Torque outputs
+      torque.collections.export_torque_outputs:
+        outputs:
+          org_status: "{{ org_status }}"
+          org_name: "{{ org_name }}"
+          org_action: "{{ org_action }}"
+          org_result_json: "{{ org_result_json }}"
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+      tags:
+        - always
+        - outputs
