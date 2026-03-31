@@ -15,7 +15,7 @@ vlans:
     auto_allow_on_uplinks: false
 vlan_groups:
   - name: flexpod-core
-    vlans: [100, 110, 120, 130]
+    vlans: [110, 120, 130]
 global_settings:
   uplink_mode: standard
   port_policy_defaults:
