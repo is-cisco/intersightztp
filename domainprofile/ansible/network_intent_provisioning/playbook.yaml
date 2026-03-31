@@ -528,9 +528,13 @@
           auto_allow_on_uplinks: >-
             {{
               (
-                item.auto_allow_on_uplinks
-                if (item.auto_allow_on_uplinks is defined)
-                else (item.id | int in native_vlan_ids)
+                true
+                if (item.native_vlan | default(false) | bool)
+                else (
+                  item.auto_allow_on_uplinks
+                  if (item.auto_allow_on_uplinks is defined)
+                  else (item.id | int in native_vlan_ids)
+                )
               ) | bool
             }}
           is_native: "{{ item.native_vlan | default(false) | bool }}"
