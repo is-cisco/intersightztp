@@ -109,6 +109,23 @@ def logout_with_xml_api(session: requests.Session, host: str, headers: dict[str,
         pass
 
 
+def logout_with_imm_session(session: requests.Session, host: str, headers: dict[str, str], *, verify_ssl: bool, timeout: int) -> None:
+    """Best-effort logout for IMM sessions."""
+    request_headers = {}
+    cookie_header = str(headers.get("Cookie", "")).strip()
+    if cookie_header:
+        request_headers["Cookie"] = cookie_header
+    csrf_token = str(session.cookies.get("csrf", "")).strip()
+    if csrf_token:
+        request_headers["X-CSRF-Token"] = csrf_token
+    if not str(request_headers.get("Cookie", "")).strip():
+        return
+    try:
+        request(session, "POST", f"https://{host}/Logout", verify_ssl=verify_ssl, timeout=timeout, headers=request_headers)
+    except Exception:
+        pass
+
+
 def login_with_imm_session(host: str, username: str, password: str, *, verify_ssl: bool, timeout: int) -> tuple[requests.Session, dict[str, str]]:
     session = requests.Session()
     response = request(session, "POST", f"https://{host}/Login", verify_ssl=verify_ssl, timeout=timeout, json={"User": username, "Password": password})
@@ -174,6 +191,7 @@ def resolve_identity(endpoint: str, credentials: list[dict[str, Any]], *, verify
                 "messages": ["Device identifier retrieved successfully"],
             }
         finally:
+            logout_with_imm_session(session, endpoint, headers, verify_ssl=verify_ssl, timeout=timeout)
             session.close()
     except Exception as imm_exc:
         return {

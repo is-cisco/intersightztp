@@ -67,6 +67,34 @@ def request(
         return None
 
 
+def logout_with_imm_session(
+    session: requests.Session,
+    host: str,
+    session_id: str,
+    *,
+    verify_ssl: bool,
+    timeout: int,
+) -> None:
+    """Best-effort logout for IMM sessions opened during password checks."""
+    if not str(session_id).strip():
+        return
+    request_headers = {"Cookie": f"sessionId={session_id}"}
+    csrf_token = str(session.cookies.get("csrf", "")).strip()
+    if csrf_token:
+        request_headers["X-CSRF-Token"] = csrf_token
+    try:
+        request(
+            session,
+            "POST",
+            f"https://{host}/Logout",
+            verify_ssl=verify_ssl,
+            timeout=timeout,
+            headers=request_headers,
+        )
+    except Exception:
+        pass
+
+
 def redfish_account_uri(account_id: str = "1") -> str:
     return f"/redfish/v1/AccountService/Accounts/{account_id}"
 
@@ -181,7 +209,19 @@ def imm_login_works(
             return False
         response.raise_for_status()
         payload = response.json() if response.content else {}
-        return bool(payload.get("SessionId"))
+        session_id = str(payload.get("SessionId", "")).strip()
+        if not session_id:
+            return False
+        try:
+            return True
+        finally:
+            logout_with_imm_session(
+                session,
+                host,
+                session_id,
+                verify_ssl=verify_ssl,
+                timeout=timeout,
+            )
     except (requests.exceptions.RequestException, ValueError):
         return False
     finally:

@@ -62,6 +62,34 @@ def request(
         return None
 
 
+def logout_with_imm_session(
+    session: requests.Session,
+    host: str,
+    session_id: str,
+    *,
+    verify_ssl: bool,
+    timeout: int,
+) -> None:
+    """Best-effort logout for IMM sessions opened during discovery probing."""
+    if not str(session_id).strip():
+        return
+    request_headers = {"Cookie": f"sessionId={session_id}"}
+    csrf_token = str(session.cookies.get("csrf", "")).strip()
+    if csrf_token:
+        request_headers["X-CSRF-Token"] = csrf_token
+    try:
+        request(
+            session,
+            "POST",
+            f"https://{host}/Logout",
+            verify_ssl=verify_ssl,
+            timeout=timeout,
+            headers=request_headers,
+        )
+    except Exception:
+        pass
+
+
 def probe_endpoint(
     host: str,
     username: str,
@@ -102,13 +130,23 @@ def probe_endpoint(
             imm_payload = imm_response.json()
         except ValueError:
             imm_payload = {}
-        if imm_payload.get("SessionId"):
-            return {
-                "device_type": "imm",
-                "detection_status": "live_detected",
-                "detection_reason": "IMM login endpoint returned a session identifier",
-                "detection_probe": "imm_login",
-            }
+        imm_session_id = str(imm_payload.get("SessionId", "")).strip()
+        if imm_session_id:
+            try:
+                return {
+                    "device_type": "imm",
+                    "detection_status": "live_detected",
+                    "detection_reason": "IMM login endpoint returned a session identifier",
+                    "detection_probe": "imm_login",
+                }
+            finally:
+                logout_with_imm_session(
+                    session,
+                    host,
+                    imm_session_id,
+                    verify_ssl=verify_ssl,
+                    timeout=timeout,
+                )
 
     xml_response = request(
         session,
