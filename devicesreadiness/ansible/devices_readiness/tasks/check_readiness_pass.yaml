@@ -1,0 +1,90 @@
+---
+- name: Wait before next readiness poll
+  ansible.builtin.pause:
+    seconds: "{{ readiness_poll_interval_normalized }}"
+  when:
+    - not (readiness_completed | default(false))
+    - readiness_attempt_number | int > 1
+  tags: [verify, wait]
+
+- name: Query Intersight for each category batch
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ api_private_key }}"
+    api_key_id: "{{ api_key_id }}"
+    api_uri: "{{ api_uri | default(omit) }}"
+    validate_certs: "{{ (validate_certs | default('true') | string | lower) in ['true', '1', 'yes'] }}"
+    resource_path: "{{ query_batch.rule.resource_path }}"
+    return_list: true
+    query_params:
+      $filter: "{{ query_batch.serial_filter }}"
+      $top: 1000
+  register: intersight_lookup
+  loop: "{{ device_batches | default([]) }}"
+  loop_control:
+    loop_var: query_batch
+    label: "{{ query_batch.category }}"
+  changed_when: false
+  no_log: true
+  timeout: "{{ api_request_timeout | default(60) | int }}"
+  when: not (readiness_completed | default(false))
+  tags: [configure, verify]
+
+- name: Initialize attempt result lists
+  ansible.builtin.set_fact:
+    missing_devices: []
+    invalid_lifecycle_devices: []
+    present_devices: []
+  changed_when: false
+  when: not (readiness_completed | default(false))
+  tags: [verify, evaluate]
+
+- name: Evaluate returned devices against readiness rules
+  ansible.builtin.include_tasks: evaluate_devices.yaml
+  vars:
+    response_results: "{{ readiness_query_result.api_response | default([]) }}"
+    requested_serials: "{{ readiness_query_result.query_batch.serial_numbers }}"
+    category_name: "{{ readiness_query_result.query_batch.category }}"
+    discovery_field: "{{ readiness_query_result.query_batch.rule.discovery_field | default('') }}"
+    allowed_states: "{{ readiness_query_result.query_batch.rule.allowed_discovery_states | default([]) }}"
+  loop: "{{ intersight_lookup.results | default([]) }}"
+  loop_control:
+    loop_var: readiness_query_result
+    label: "{{ readiness_query_result.query_batch.category }}"
+  when: not (readiness_completed | default(false))
+  tags: [verify, evaluate]
+
+- name: Validate Fabric Interconnect A/B pairing
+  ansible.builtin.include_tasks: validate_fi_pair.yaml
+  vars:
+    fi_lookup_results: >-
+      {{
+        intersight_lookup.results
+        | selectattr('query_batch.category', 'equalto', 'FabricInterconnect')
+        | list
+      }}
+  when:
+    - requested_devices | selectattr('category', 'equalto', 'FabricInterconnect') | list | length > 0
+    - not (readiness_completed | default(false))
+  tags: [verify, fi_pair]
+
+- name: Build readiness summary for current attempt
+  ansible.builtin.set_fact:
+    readiness_completed: "{{ (missing_devices | length == 0) and (invalid_lifecycle_devices | length == 0) }}"
+    readiness_attempts_executed: "{{ readiness_attempt_number | int }}"
+    readiness_last_attempt: "{{ readiness_attempt_number | int }}"
+    verification_summary:
+      requested_count: "{{ requested_devices | map(attribute='serial_numbers') | map('length') | sum }}"
+      present_count: "{{ present_devices | length }}"
+      missing_count: "{{ missing_devices | length }}"
+      invalid_lifecycle_count: "{{ invalid_lifecycle_devices | length }}"
+      present_devices: "{{ present_devices }}"
+      missing_devices: "{{ missing_devices }}"
+      invalid_lifecycle_devices: "{{ invalid_lifecycle_devices }}"
+      success: "{{ (missing_devices | length == 0) and (invalid_lifecycle_devices | length == 0) }}"
+      wait_for_readiness: "{{ wait_for_readiness_normalized }}"
+      max_attempts: "{{ readiness_max_attempts_normalized }}"
+      attempts_executed: "{{ readiness_attempt_number | int }}"
+      last_attempt: "{{ readiness_attempt_number | int }}"
+  changed_when: false
+  when: not (readiness_completed | default(false))
+  tags: [verify, outputs]

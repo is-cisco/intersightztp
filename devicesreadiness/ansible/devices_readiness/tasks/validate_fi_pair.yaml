@@ -1,0 +1,59 @@
+---
+- name: Initialize Fabric Interconnect pair validation facts
+  ansible.builtin.set_fact:
+    fi_pair_errors: []
+    fi_pair_records: "{{ ((fi_lookup_results | first).api_response | default([])) if (fi_lookup_results | length) > 0 else [] }}"
+    fi_requested_serials: "{{ ((fi_lookup_results | first).query_batch.serial_numbers | default([])) if (fi_lookup_results | length) > 0 else [] }}"
+  tags: [verify, fi_pair]
+
+- name: Flag invalid Fabric Interconnect pair size
+  ansible.builtin.set_fact:
+    fi_pair_errors: "{{ fi_pair_errors + ['FabricInterconnect category must contain exactly 2 serial numbers for an A/B pair'] }}"
+  when: fi_requested_serials | length != 2
+  tags: [verify, fi_pair]
+
+- name: Flag missing Fabric Interconnect pair members
+  ansible.builtin.set_fact:
+    fi_pair_errors: "{{ fi_pair_errors + ['FabricInterconnect A/B pair validation requires both serials to be present in network/Elements'] }}"
+  when: fi_pair_records | length != 2
+  tags: [verify, fi_pair]
+
+- name: Flag mismatched Fabric Interconnect target ownership
+  ansible.builtin.set_fact:
+    fi_pair_errors: "{{ fi_pair_errors + ['FabricInterconnect serials are not part of the same target pair'] }}"
+  when:
+    - fi_pair_records | length == 2
+    - (fi_pair_records | map(attribute='DeviceMoId') | unique | list | length) != 1
+  tags: [verify, fi_pair]
+
+- name: Flag invalid Fabric Interconnect switch IDs
+  ansible.builtin.set_fact:
+    fi_pair_errors: "{{ fi_pair_errors + ['FabricInterconnect serials must resolve to one switch A and one switch B'] }}"
+  when:
+    - fi_pair_records | length == 2
+    - (fi_pair_records | map(attribute='SwitchId') | sort | list) != ['A', 'B']
+  tags: [verify, fi_pair]
+
+- name: Append Fabric Interconnect pair validation failures
+  ansible.builtin.set_fact:
+    invalid_lifecycle_devices: "{{ invalid_lifecycle_devices + [fi_pair_failure] }}"
+  vars:
+    fi_pair_failure:
+      category: FabricInterconnect
+      serial: "{{ fi_requested_serials | join(',') }}"
+      status: invalid_pair
+      discovery_field: "SwitchId+DeviceMoId"
+      actual_discovery_state: >-
+        {{
+          fi_pair_records
+          | map(attribute='Serial')
+          | zip(fi_pair_records | map(attribute='SwitchId'), fi_pair_records | map(attribute='DeviceMoId'))
+          | list
+          | to_json
+        }}
+      allowed_discovery_states:
+        - same DeviceMoId
+        - SwitchId A/B pair
+      error_messages: "{{ fi_pair_errors }}"
+  when: fi_pair_errors | length > 0
+  tags: [verify, fi_pair]

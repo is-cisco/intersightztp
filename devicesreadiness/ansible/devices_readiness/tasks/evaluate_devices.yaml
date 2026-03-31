@@ -1,0 +1,101 @@
+---
+- name: Initialize category evaluation accumulators
+  ansible.builtin.set_fact:
+    category_present_serials: []
+  tags: [verify, evaluate]
+
+- name: Inspect returned records for category
+  ansible.builtin.set_fact:
+    category_present_serials: >-
+      {{
+        category_present_serials
+        + [response_item.Serial]
+        if response_item.Serial is defined
+        and response_item.Serial in requested_serials
+        and response_item.Serial not in category_present_serials
+        else category_present_serials
+      }}
+    invalid_lifecycle_devices: >-
+      {{
+        invalid_lifecycle_devices
+        + [{
+            'category': category_name,
+            'serial': response_item.Serial,
+            'status': 'not_discovered',
+            'discovery_field': (
+              'Lifecycle'
+              if category_name == 'Blade'
+              else 'ManagementMode+Lifecycle'
+              if category_name == 'Rack'
+              else 'present'
+              if category_name == 'Chassis'
+              else discovery_field
+            ),
+            'actual_discovery_state': (
+              response_item.Lifecycle | default('undefined')
+              if category_name == 'Blade'
+              else ((response_item.ManagementMode | default('undefined')) ~ '|' ~ (response_item.Lifecycle | default('undefined')))
+              if category_name == 'Rack'
+              else 'present'
+              if category_name == 'Chassis'
+              else (response_item[discovery_field] if discovery_field in response_item else 'undefined')
+            ),
+            'allowed_discovery_states': (
+              ['Active']
+              if category_name == 'Blade'
+              else ['IMM+Active', 'IntersightStandalone']
+              if category_name == 'Rack'
+              else ['present']
+              if category_name == 'Chassis'
+              else allowed_states
+            )
+          }]
+        if response_item.Serial is defined
+        and response_item.Serial in requested_serials
+        and not (
+          ((response_item.Lifecycle | default('')) == 'Active')
+          if category_name == 'Blade'
+          else (
+            ((response_item.ManagementMode | default('')) == 'IMM' and (response_item.Lifecycle | default('')) == 'Active')
+            or ((response_item.ManagementMode | default('')) == 'IntersightStandalone')
+          )
+          if category_name == 'Rack'
+          else true
+          if category_name == 'Chassis'
+          else ((discovery_field in response_item) and (response_item[discovery_field] in allowed_states))
+        )
+        else invalid_lifecycle_devices
+      }}
+  loop: "{{ response_results }}"
+  loop_control:
+    loop_var: response_item
+    label: "{{ response_item.Serial | default('unknown-serial') }}"
+  tags: [verify, evaluate]
+
+- name: Append present devices for category
+  ansible.builtin.set_fact:
+    present_devices: "{{ present_devices + [present_device] }}"
+  vars:
+    present_device:
+      category: "{{ category_name }}"
+      serial: "{{ present_serial }}"
+      status: present
+  loop: "{{ category_present_serials }}"
+  loop_control:
+    loop_var: present_serial
+    label: "{{ present_serial }}"
+  tags: [verify, evaluate]
+
+- name: Append missing devices for category
+  ansible.builtin.set_fact:
+    missing_devices: "{{ missing_devices + [missing_device] }}"
+  vars:
+    missing_device:
+      category: "{{ category_name }}"
+      serial: "{{ missing_serial }}"
+      status: missing
+  loop: "{{ requested_serials | difference(category_present_serials) }}"
+  loop_control:
+    loop_var: missing_serial
+    label: "{{ missing_serial }}"
+  tags: [verify, evaluate]
