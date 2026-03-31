@@ -2,12 +2,16 @@
 vlans:
   - id: 300
     name: ai-mgmt
+    auto_allow_on_uplinks: false
   - id: 310
     name: ai-storage
+    auto_allow_on_uplinks: false
   - id: 320
     name: ai-training
+    auto_allow_on_uplinks: false
   - id: 330
     name: ai-inference
+    auto_allow_on_uplinks: false
 vlan_groups:
   - name: ai-fabric
     vlans: [300, 310, 320, 330]

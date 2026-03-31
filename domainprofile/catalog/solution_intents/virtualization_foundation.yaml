@@ -5,10 +5,13 @@ vlans:
     auto_allow_on_uplinks: false
   - id: 210
     name: vmotion
+    auto_allow_on_uplinks: false
   - id: 220
     name: vsan
+    auto_allow_on_uplinks: false
   - id: 230
     name: tenant-vm
+    auto_allow_on_uplinks: false
 vlan_groups:
   - name: virtualization-core
     vlans: [200, 210, 220, 230]

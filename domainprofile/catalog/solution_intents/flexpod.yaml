@@ -3,12 +3,16 @@ vlans:
   - id: 100
     name: mgmt
     native_vlan: true
+    auto_allow_on_uplinks: false
   - id: 110
     name: vmotion
+    auto_allow_on_uplinks: false
   - id: 120
     name: storage-nfs
+    auto_allow_on_uplinks: false
   - id: 130
     name: tenant-a
+    auto_allow_on_uplinks: false
 vlan_groups:
   - name: flexpod-core
     vlans: [100, 110, 120, 130]
