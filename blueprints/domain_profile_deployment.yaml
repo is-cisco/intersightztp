@@ -56,8 +56,9 @@ grains:
     kind: ansible
     spec:
       source:
-        store: intersightztp
+        store: automation-repo
         path: ansible/bootstrap_collections/playbook.yaml
+      command-arguments: -vvv
       agent:
         name: '{{ .inputs.agent }}'
       inventory-file:
@@ -71,6 +72,7 @@ grains:
       source:
         store: intersightztp
         path: domainprofile/ansible/domain_profile_deployment/playbook.yaml
+      command-arguments: -vvv
       agent:
         name: '{{ .inputs.agent }}'
       inventory-file:
