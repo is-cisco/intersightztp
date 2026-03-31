@@ -98,9 +98,19 @@ grains:
         - missing_devices_json
         - invalid_lifecycle_devices_json
       on-destroy:
-        - path: teardown.yaml
+        - source:
+            store: intersightztp
+            path: devicesreadiness/ansible/devices_readiness/teardown.yaml
           inventory-file:
             localhost:
               hosts:
                 localhost:
                   ansible_connection: local
+          inputs:
+            - devices_yaml: '{{ .inputs.devices_yaml }}'
+            - devices_json: '{{ .inputs.devices_json }}'
+            - category_rules_json: '{{ .inputs.category_rules_json }}'
+            - api_request_timeout: '{{ .inputs.api_request_timeout }}'
+            - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
+            - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
+            - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
