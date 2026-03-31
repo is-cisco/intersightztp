@@ -1,0 +1,106 @@
+spec_version: 2
+
+description: Validate requested devices are present in Cisco Intersight and either check readiness once or wait until they become ready.
+
+inputs:
+  api_key_id:
+    type: string
+    title: Intersight API Key ID
+    description: Cisco Intersight API key ID
+  api_private_key:
+    type: string
+    title: Intersight Private Key
+    description: Cisco Intersight private key content or path accepted by the runner
+  api_uri:
+    type: string
+    title: Intersight API URI
+    default: https://intersight.com/api/v1
+    description: Optional Cisco Intersight API base URI
+  validate_certs:
+    type: string
+    title: Validate Certificates
+    default: "true"
+    description: Pass true or false as a string
+  devices_yaml:
+    type: string
+    title: Devices YAML
+    description: Preferred YAML payload describing devices and Fabric Interconnect pair entities
+  devices_json:
+    type: string
+    title: Devices JSON
+    default: ""
+    description: Optional legacy JSON array with category and serial_numbers entries for backward compatibility
+  category_rules_json:
+    type: string
+    title: Category Rules JSON
+    default: ""
+    description: Optional JSON object overriding API paths and readiness rules by category
+  api_request_timeout:
+    type: string
+    title: API Request Timeout
+    default: "60"
+    description: Timeout in seconds for each Intersight API request
+  wait_for_readiness:
+    type: string
+    title: Wait For Readiness
+    default: "false"
+    description: Pass true to keep polling until devices are ready or the attempt limit is reached
+  readiness_poll_interval:
+    type: string
+    title: Readiness Poll Interval
+    default: "30"
+    description: Seconds between readiness polls when wait_for_readiness is true
+  readiness_max_attempts:
+    type: string
+    title: Readiness Max Attempts
+    default: "20"
+    description: Maximum readiness poll attempts when wait_for_readiness is true
+
+outputs:
+  verification_summary_json:
+    value: '{{ .grains.devices_readiness.outputs.verification_summary_json }}'
+  verification_success:
+    value: '{{ .grains.devices_readiness.outputs.verification_success }}'
+  missing_devices_json:
+    value: '{{ .grains.devices_readiness.outputs.missing_devices_json }}'
+  invalid_lifecycle_devices_json:
+    value: '{{ .grains.devices_readiness.outputs.invalid_lifecycle_devices_json }}'
+
+grains:
+  devices_readiness:
+    kind: ansible
+    spec:
+      source:
+        store: intersightztp
+        path: devicesreadiness/ansible/devices_readiness
+        # Torque uses playbook.yaml in this bundle directory as the default run entrypoint.
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+              ansible_connection: local
+          vars:
+            api_key_id: '{{ .inputs.api_key_id }}'
+            api_private_key: '{{ .inputs.api_private_key }}'
+            api_uri: '{{ .inputs.api_uri }}'
+            validate_certs: '{{ .inputs.validate_certs }}'
+      inputs:
+        - devices_yaml: '{{ .inputs.devices_yaml }}'
+        - devices_json: '{{ .inputs.devices_json }}'
+        - category_rules_json: '{{ .inputs.category_rules_json }}'
+        - api_request_timeout: '{{ .inputs.api_request_timeout }}'
+        - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
+        - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
+        - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
+      outputs:
+        - verification_summary_json
+        - verification_success
+        - missing_devices_json
+        - invalid_lifecycle_devices_json
+      on-destroy:
+        - path: teardown.yaml
+          inventory-file:
+            localhost:
+              hosts:
+                localhost:
+                  ansible_connection: local
