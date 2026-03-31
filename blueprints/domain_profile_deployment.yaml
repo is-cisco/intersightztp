@@ -56,8 +56,8 @@ grains:
     kind: ansible
     spec:
       source:
-        store: automation-repo
-        path: ansible/bootstrap_collections/playbook.yaml
+        store: intersightztp
+        path: domainprofile/ansible/bootstrap_collections/playbook.yaml
       command-arguments: -vvv
       agent:
         name: '{{ .inputs.agent }}'
