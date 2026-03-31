@@ -1,0 +1,39 @@
+---
+vlans:
+  - id: 200
+    name: esxi-mgmt
+    auto_allow_on_uplinks: false
+  - id: 210
+    name: vmotion
+  - id: 220
+    name: vsan
+  - id: 230
+    name: tenant-vm
+vlan_groups:
+  - name: virtualization-core
+    vlans: [200, 210, 220, 230]
+global_settings:
+  port_policy_defaults:
+    uplink_ports:
+      role: ethernet-uplink
+      speed: 40G
+      admin_state: enabled
+    server_ports:
+      role: server
+      speed: 25G
+      fec: auto
+  network_control:
+    cdp_enabled: true
+    lldp_enabled: true
+    udld: alert
+  policy_attachments:
+    ethernet_network_control_policy: virtualization-eth-ncp
+    ethernet_qos_policy: virtualization-eth-qos
+    flow_control_policy: virtualization-flow-control
+uplink_profiles:
+  - name: virtualization-uplinks
+    role: ethernet-uplink
+    vlan_groups:
+      - virtualization-core
+    native_vlan: 200
+    admin_state: enabled

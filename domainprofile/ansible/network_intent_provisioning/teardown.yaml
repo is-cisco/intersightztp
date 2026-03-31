@@ -1,0 +1,404 @@
+---
+- name: Teardown Cisco Intersight network intent provisioning
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    api_info: &api_info
+      api_private_key: "{{ api_private_key }}"
+      api_key_id: "{{ api_key_id }}"
+      api_uri: "{{ api_uri | default(omit) }}"
+      validate_certs: "{{ validate_certs | default(omit) }}"
+
+  tasks:
+    - name: Validate teardown inputs
+      ansible.builtin.assert:
+        that:
+          - api_key_id | default('') | length > 0
+          - api_private_key | default('') | length > 0
+          - organization | default('') | length > 0
+          - deployment_name | default('') | length > 0
+        fail_msg: >-
+          Network intent teardown requires api_key_id, api_private_key,
+          organization, and deployment_name.
+      tags: [always, validate]
+
+    - name: Load catalog default mapping
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../catalog/solution_intents/catalog-map.yaml"
+        name: catalog_map
+      tags: [always, validate]
+
+    - name: Resolve network intent catalog path
+      ansible.builtin.set_fact:
+        resolved_intent_name: >-
+          {{
+            solution_intent
+            | default(catalog_map.solution_intent_map[catalog_solution_key | default('default')] | default(catalog_map.default_solution_intent), true)
+          }}
+        policy_prefix: "{{ deployment_name }}"
+        port_policy_name: "{{ deployment_name ~ '-Port-Policy' }}"
+        vlan_policy_name: "{{ deployment_name ~ '-VLAN-Policy' }}"
+        multicast_policy_name: "{{ deployment_name ~ '-Multicast-Policy' }}"
+      tags: [always]
+
+    - name: Resolve intent catalog path
+      ansible.builtin.set_fact:
+        intent_catalog_path: >-
+          {{
+            playbook_dir
+            ~ '/../../catalog/solution_intents/'
+            ~ resolved_intent_name
+            ~ '.yaml'
+          }}
+      tags: [always]
+
+    - name: Check intent catalog exists
+      ansible.builtin.stat:
+        path: "{{ intent_catalog_path }}"
+      register: intent_catalog_file
+      tags: [always]
+
+    - name: Load intent definition when present
+      ansible.builtin.include_vars:
+        file: "{{ intent_catalog_path }}"
+        name: solution_intent_data
+      when: intent_catalog_file.stat.exists
+      tags: [always]
+
+    - name: Compose effective VLAN groups for teardown
+      ansible.builtin.set_fact:
+        effective_vlan_groups: "{{ solution_intent_data.vlan_groups | default([]) }}"
+      tags: [always]
+
+    - name: Look up VLAN and multicast policies for switch-profile cleanup
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: "{{ item.resource_path }}"
+        query_params:
+          $filter: "Name eq '{{ item.name }}'"
+      loop:
+        - key: vlan_policy
+          name: "{{ vlan_policy_name }}"
+          resource_path: /fabric/EthNetworkPolicies
+        - key: multicast_policy
+          name: "{{ multicast_policy_name }}"
+          resource_path: /fabric/MulticastPolicies
+      loop_control:
+        label: "{{ item.key }}"
+      register: network_policy_lookup_results
+      tags: [destroy, detach]
+
+    - name: Capture network policy Moids for switch-profile cleanup
+      ansible.builtin.set_fact:
+        teardown_vlan_policy_moid: >-
+          {{
+            (
+              network_policy_lookup_results.results
+              | default([])
+              | selectattr('item.key', 'equalto', 'vlan_policy')
+              | map(attribute='api_response')
+              | selectattr('Moid', 'defined')
+              | map(attribute='Moid')
+              | list
+              | first
+            ) | default('')
+          }}
+        teardown_multicast_policy_moid: >-
+          {{
+            (
+              network_policy_lookup_results.results
+              | default([])
+              | selectattr('item.key', 'equalto', 'multicast_policy')
+              | map(attribute='api_response')
+              | selectattr('Moid', 'defined')
+              | map(attribute='Moid')
+              | list
+              | first
+            ) | default('')
+          }}
+      tags: [destroy, detach]
+
+    - name: Look up switch profiles for policy detach
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      register: teardown_switch_profile_lookup_results
+      tags: [destroy, detach]
+
+    - name: Wait for switch profiles to be idle before teardown detach
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      register: teardown_switch_profile_status_results
+      until: >-
+        (
+          teardown_switch_profile_status_results.api_response.Moid is not defined
+        )
+        or
+        (
+          (
+            teardown_switch_profile_status_results.api_response.ConfigContext is defined
+          )
+          and
+          (
+            teardown_switch_profile_status_results.api_response.ConfigContext.ConfigState
+            in ['Associated', 'Failed', 'Inconsistent']
+          )
+          and
+          (
+            teardown_switch_profile_status_results.api_response.RunningWorkflows
+            | default([])
+            | length
+          ) == 0
+        )
+      retries: "{{ switch_profile_wait_retries | default(20) }}"
+      delay: "{{ switch_profile_wait_delay | default(15) }}"
+      tags: [destroy, detach]
+
+    - name: Build network-policy detach patches for switch profiles
+      ansible.builtin.set_fact:
+        switch_profile_policy_detach_updates: "{{ (switch_profile_policy_detach_updates | default([])) + [detach_update] }}"
+      vars:
+        removable_policy_moids: >-
+          {{
+            [
+              teardown_vlan_policy_moid,
+              teardown_multicast_policy_moid
+            ]
+            | reject('equalto', '')
+            | list
+          }}
+        removal_operations: >-
+          {%- set ops = [] -%}
+          {%- for attachment in (item.api_response.PolicyBucket | default([])) -%}
+          {%- if attachment.Moid is defined and attachment.Moid in removable_policy_moids -%}
+          {%- set _ = ops.insert(0, {'op': 'remove', 'path': '/PolicyBucket/' ~ loop.index0 }) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ ops }}
+        detach_update:
+          switch_profile_name: "{{ item.api_response.Name }}"
+          switch_profile_moid: "{{ item.api_response.Moid }}"
+          switch_id: "{{ item.api_response.SwitchId }}"
+          assigned_switch_moid: "{{ item.api_response.AssignedSwitch.Moid | default('') }}"
+          removal_operations: "{{ removal_operations }}"
+      loop: "{{ teardown_switch_profile_lookup_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}"
+      when:
+        - item.api_response is defined
+        - item.api_response.Name is defined
+        - item.api_response.Moid is defined
+      tags: [destroy, detach]
+
+    - name: Detach phase-2 policies from switch profiles
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+        update_method: json-patch
+        list_body: "{{ item.removal_operations }}"
+      loop: "{{ switch_profile_policy_detach_updates | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when:
+        - item.removal_operations | length > 0
+      register: switch_profile_policy_detach_results
+      tags: [destroy, detach]
+
+    - name: Build switch profiles requiring cleanup deploy
+      ansible.builtin.set_fact:
+        switch_profiles_requiring_cleanup_deploy: "{{ (switch_profiles_requiring_cleanup_deploy | default([])) + [deploy_entry] }}"
+      vars:
+        deploy_entry:
+          switch_profile_name: "{{ item.switch_profile_name }}"
+          switch_profile_moid: "{{ item.switch_profile_moid }}"
+          switch_id: "{{ item.switch_id }}"
+          assigned_switch_moid: "{{ item.assigned_switch_moid }}"
+      loop: "{{ switch_profile_policy_detach_updates | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when:
+        - item.removal_operations | length > 0
+      tags: [destroy, detach]
+
+    - name: Deploy switch profiles after teardown detach
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+        api_body:
+          Name: "{{ item.switch_profile_name }}"
+          ObjectType: fabric.SwitchProfile
+          ClassId: fabric.SwitchProfile
+          SwitchId: "{{ item.switch_id }}"
+          AssignedSwitch:
+            ObjectType: network.Element
+            ClassId: mo.MoRef
+            Moid: "{{ item.assigned_switch_moid }}"
+          Action: Deploy
+      loop: "{{ switch_profiles_requiring_cleanup_deploy | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      register: switch_profile_cleanup_deploy_results
+      when:
+        - switch_profiles_requiring_cleanup_deploy | default([]) | length > 0
+      tags: [destroy, detach]
+
+    - name: Wait for switch profiles to settle after teardown detach
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+      loop: "{{ switch_profiles_requiring_cleanup_deploy | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      register: switch_profile_cleanup_wait_results
+      until: >-
+        (
+          switch_profile_cleanup_wait_results.api_response.ConfigContext.ConfigState
+          in ['Associated', 'Failed', 'Inconsistent']
+        )
+        and
+        (
+          switch_profile_cleanup_wait_results.api_response.RunningWorkflows
+          | default([])
+          | length
+        ) == 0
+      retries: "{{ switch_profile_wait_retries | default(20) }}"
+      delay: "{{ switch_profile_wait_delay | default(15) }}"
+      when:
+        - switch_profiles_requiring_cleanup_deploy | default([]) | length > 0
+      tags: [destroy, detach]
+
+    - name: Validate switch profiles are stable after teardown detach
+      ansible.builtin.assert:
+        that:
+          - item.api_response.ConfigContext.ConfigState | default('') == 'Associated'
+        fail_msg: >-
+          Switch profile {{ item.item.switch_profile_name }} did not return to
+          Associated after detaching phase-2 policies. Final ConfigState was
+          {{ item.api_response.ConfigContext.ConfigState | default('unknown') }}.
+      loop: "{{ switch_profile_cleanup_wait_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.switch_profile_name }}"
+      when:
+        - switch_profiles_requiring_cleanup_deploy | default([]) | length > 0
+      tags: [destroy, detach]
+
+    - name: Look up onboarding port policy for Ethernet network group cleanup
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/PortPolicies
+        query_params:
+          $filter: "Name eq '{{ port_policy_name }}'"
+      register: teardown_port_policy_lookup_result
+      tags: [destroy, detach]
+
+    - name: Look up uplink port channels for port policy cleanup
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/UplinkPcRoles
+        return_list: true
+        query_params:
+          $filter: "PortPolicy.Moid eq '{{ teardown_port_policy_lookup_result.api_response.Moid }}'"
+      when:
+        - teardown_port_policy_lookup_result.api_response is defined
+        - teardown_port_policy_lookup_result.api_response.Moid is defined
+      register: teardown_uplink_pc_lookup_result
+      tags: [destroy, detach]
+
+    - name: Build Ethernet network group detach operations for uplink port channels
+      ansible.builtin.set_fact:
+        teardown_uplink_pc_detach_updates: "{{ (teardown_uplink_pc_detach_updates | default([])) + [detach_update] }}"
+      vars:
+        removal_operations: >-
+          {%- set ops = [] -%}
+          {%- for policy_ref in item.EthNetworkGroupPolicy | default([]) -%}
+          {%- set _ = ops.insert(0, {'op': 'remove', 'path': '/EthNetworkGroupPolicy/' ~ loop.index0 }) -%}
+          {%- endfor -%}
+          {{ ops }}
+        detach_update:
+          uplink_pc_name: "{{ item.Name | default(item.PcId | string) }}"
+          uplink_pc_moid: "{{ item.Moid }}"
+          removal_operations: "{{ removal_operations }}"
+      loop: "{{ teardown_uplink_pc_lookup_result.api_response | default([]) }}"
+      loop_control:
+        label: "{{ item.Name | default(item.PcId | string) }}"
+      when:
+        - teardown_uplink_pc_lookup_result is defined
+        - teardown_uplink_pc_lookup_result.api_response is defined
+      tags: [destroy, detach]
+
+    - name: Clear Ethernet network group references from uplink port channels
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/UplinkPcRoles
+        query_params:
+          $filter: "Moid eq '{{ item.uplink_pc_moid }}'"
+        update_method: json-patch
+        list_body: "{{ item.removal_operations }}"
+      loop: "{{ teardown_uplink_pc_detach_updates | default([]) }}"
+      loop_control:
+        label: "{{ item.uplink_pc_name }}"
+      when:
+        - item.removal_operations | length > 0
+      tags: [destroy, detach]
+
+    - name: Clear VLAN entries before deleting VLAN policy
+      cisco.intersight.intersight_vlan_policy:
+        <<: *api_info
+        state: present
+        organization: "{{ organization }}"
+        name: "{{ vlan_policy_name }}"
+        description: "VLAN policy for {{ deployment_name }} network intent"
+        vlans: []
+      when:
+        - teardown_vlan_policy_moid | default('') | length > 0
+      tags: [destroy, policies]
+
+    - name: Delete VLAN policy
+      cisco.intersight.intersight_vlan_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ vlan_policy_name }}"
+      tags: [destroy, policies]
+
+    - name: Delete multicast policy
+      cisco.intersight.intersight_multicast_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ multicast_policy_name }}"
+      tags: [destroy, policies]
+
+    - name: Delete Ethernet network group policies
+      cisco.intersight.intersight_ethernet_network_group_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ policy_prefix }}-{{ item.name }}"
+      loop: "{{ effective_vlan_groups }}"
+      loop_control:
+        label: "{{ policy_prefix }}-{{ item.name }}"
+      tags: [destroy, policies]

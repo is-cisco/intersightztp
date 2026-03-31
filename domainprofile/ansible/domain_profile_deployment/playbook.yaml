@@ -1,0 +1,1334 @@
+---
+- name: Build Cisco Intersight domain profile intent payload
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    api_info: &api_info
+      api_private_key: "{{ api_private_key }}"
+      api_key_id: "{{ api_key_id }}"
+      api_uri: "{{ api_uri | default(omit) }}"
+      validate_certs: "{{ validate_certs | default(omit) }}"
+      state: "{{ state | default(omit) }}"
+
+    fi_devices: "{{ fi_devices_json | default('[]', true) | from_json }}"
+    customer_overrides: "{{ customer_overrides_json | default('{}', true) | from_json }}"
+    port_config: "{{ port_config_yaml | default('{}', true) | from_yaml }}"
+    fi_model_key: "{{ fi_model_resolved | lower | regex_replace('[^a-z0-9]+', '_') }}"
+    fi_defaults_path: >-
+      {{
+        playbook_dir
+        ~ '/../../defaults/fi_models/'
+        ~ fi_model_key
+        ~ '.yaml'
+      }}
+    port_catalog_path: >-
+      {{
+        (
+          playbook_dir
+          ~ '/../../catalog/domain_profile_ports/'
+          ~ port_catalog_key
+          ~ '.yaml'
+        )
+        if (port_catalog_key | default('') | length > 0)
+        else ''
+      }}
+    policy_catalog_path: >-
+      {{
+        playbook_dir
+        ~ '/../../catalog/domain_profile_policies/default.yaml'
+      }}
+
+  tasks:
+    - name: Validate required credentials and FI inventory input
+      ansible.builtin.assert:
+        that:
+          - api_key_id | default('') | length > 0
+          - api_private_key | default('') | length > 0
+          - organization | default('') | length > 0
+          - deployment_name | default('') | length > 0
+          - fi_devices_json | default('') | length > 0
+          - fi_devices is sequence
+          - fi_devices | length > 0
+        fail_msg: >-
+          Required inputs are missing. Provide api_key_id, api_private_key,
+          organization, deployment_name, and fi_devices_json as a JSON array
+          of FI device objects.
+      tags: [always, validate]
+
+    - name: Look up organization in Intersight during preflight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /organization/Organizations
+        query_params:
+          $filter: "Name eq '{{ organization }}'"
+      register: organization_lookup_result
+      tags: [always, validate]
+
+    - name: Validate organization exists in Intersight
+      ansible.builtin.assert:
+        that:
+          - organization_lookup_result.api_response.Moid is defined
+          - organization_lookup_result.api_response.Moid | length > 0
+        fail_msg: >-
+          Organization {{ organization }} does not exist in Intersight.
+          This workflow validates and uses an existing organization; it does
+          not create one.
+      tags: [always, validate]
+
+    - name: Validate FI entries contain serial numbers
+      ansible.builtin.assert:
+        that:
+          - item.serial_number is defined
+          - item.serial_number | string | length > 0
+        fail_msg: "Each FI device must include a serial_number."
+      loop: "{{ fi_devices }}"
+      loop_control:
+        label: "{{ item.serial_number | default('missing-serial') }}"
+      tags: [always, validate]
+
+    - name: Discover FI details from Intersight by serial number
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /network/Elements
+        query_params:
+          $filter: "Serial eq '{{ item.serial_number }}'"
+      loop: "{{ fi_devices }}"
+      loop_control:
+        label: "{{ item.serial_number }}"
+      register: fi_discovery_results
+      tags: [always, validate, discover]
+
+    - name: Validate discovered FIs are assignable in the target organization
+      ansible.builtin.assert:
+        that:
+          - item.api_response.Moid | default('') | length > 0
+          - >-
+            (
+              item.api_response.Organization is defined
+              and item.api_response.Organization.Moid | default('') == organization_lookup_result.api_response.Moid
+            )
+            or
+            (
+              item.api_response.PermissionResources | default([])
+              | selectattr('Moid', 'defined')
+              | map(attribute='Moid')
+              | list
+              | select('equalto', organization_lookup_result.api_response.Moid)
+              | list
+              | length > 0
+            )
+        fail_msg: >-
+          FI {{ item.item.serial_number }} was discovered in Intersight but is
+          not assignable in organization {{ organization }}. Use an
+          organization that has access to this fabric interconnect or move the
+          FI into the correct organization before launching onboarding.
+      loop: "{{ fi_discovery_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.serial_number }}"
+      tags: [always, validate, discover]
+
+    - name: Build FI inventory with discovered model details
+      ansible.builtin.set_fact:
+        fi_inventory: "{{ (fi_inventory | default([])) + [resolved_device] }}"
+      vars:
+        discovered_response: "{{ item.api_response | default({}) }}"
+        resolved_device: >-
+          {{
+            item.item
+            | combine(
+                {
+                  'intersight_name': discovered_response.Name | default(item.item.name | default(item.item.serial_number)),
+                  'moid': discovered_response.Moid | default(item.item.moid | default('')),
+                  'model': discovered_response.Model | default(item.item.model | default('')),
+                  'discovery_source': 'intersight'
+                },
+                recursive=True
+              )
+          }}
+      loop: "{{ fi_discovery_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.serial_number }}"
+      tags: [always, validate, discover]
+
+    - name: Validate discovery returned a model for every FI
+      ansible.builtin.assert:
+        that:
+          - item.model | default('') | length > 0
+        fail_msg: >-
+          FI model discovery failed for serial {{ item.serial_number }}.
+          Ensure the FI is claimed in Intersight and visible through
+          /network/Elements.
+      loop: "{{ fi_inventory }}"
+      loop_control:
+        label: "{{ item.serial_number }}"
+      tags: [always, validate, discover]
+
+    - name: Resolve unique FI models from discovered inventory
+      ansible.builtin.set_fact:
+        fi_models_discovered: "{{ fi_inventory | map(attribute='model') | map('string') | list | unique }}"
+      tags: [always, validate, discover]
+
+    - name: Validate all discovered FIs map to one model family
+      ansible.builtin.assert:
+        that:
+          - fi_models_discovered | length == 1
+        fail_msg: >-
+          Multiple FI models were discovered for this domain request:
+          {{ fi_models_discovered }}. Split the request or add explicit
+          multi-model logic.
+      tags: [always, validate, discover]
+
+    - name: Resolve FI model from discovery
+      ansible.builtin.set_fact:
+        fi_model_resolved: "{{ fi_models_discovered[0] }}"
+      tags: [always, validate, discover]
+
+    - name: Check FI defaults file exists
+      ansible.builtin.stat:
+        path: "{{ fi_defaults_path }}"
+      register: fi_defaults_file
+      tags: [always, validate, defaults]
+
+    - name: Validate referenced FI defaults exist
+      ansible.builtin.assert:
+        that:
+          - fi_defaults_file.stat.exists
+        fail_msg: >-
+          Repository defaults are incomplete for this request. Missing
+          FI model defaults file.
+      tags: [always, validate]
+
+    - name: Load FI model defaults
+      ansible.builtin.include_vars:
+        file: "{{ fi_defaults_path }}"
+        name: fi_model_defaults
+      tags: [always, defaults]
+
+    - name: Check default domain policy catalog exists
+      ansible.builtin.stat:
+        path: "{{ policy_catalog_path }}"
+      register: policy_catalog_file
+      tags: [always, validate, defaults]
+
+    - name: Validate default domain policy catalog exists
+      ansible.builtin.assert:
+        that:
+          - policy_catalog_file.stat.exists
+        fail_msg: >-
+          Repository defaults are incomplete for this request. Missing
+          default domain policy catalog.
+      tags: [always, validate, defaults]
+
+    - name: Load default domain policy catalog
+      ansible.builtin.include_vars:
+        file: "{{ policy_catalog_path }}"
+        name: domain_policy_catalog
+      tags: [always, defaults]
+
+    - name: Check optional domain port catalog exists
+      ansible.builtin.stat:
+        path: "{{ port_catalog_path }}"
+      register: port_catalog_file
+      when: port_catalog_key | default('') | length > 0
+      tags: [always, validate, defaults]
+
+    - name: Validate optional domain port catalog exists
+      ansible.builtin.assert:
+        that:
+          - port_catalog_file.stat.exists
+        fail_msg: >-
+          Requested domain port catalog {{ port_catalog_key }} does not exist.
+          Add the catalog file under catalog/domain_profile_ports or clear
+          port_catalog_key.
+      when: port_catalog_key | default('') | length > 0
+      tags: [always, validate, defaults]
+
+    - name: Load optional domain port catalog
+      ansible.builtin.include_vars:
+        file: "{{ port_catalog_path }}"
+        name: domain_port_catalog
+      when: port_catalog_key | default('') | length > 0
+      tags: [always, defaults]
+
+    - name: Initialize expanded Ethernet port lists
+      ansible.builtin.set_fact:
+        allowed_uplink_ports: []
+        allowed_server_ports: []
+      tags: [always, compose]
+
+    - name: Expand Ethernet uplink port ranges for validation
+      ansible.builtin.set_fact:
+        allowed_uplink_ports: "{{ allowed_uplink_ports + expanded_ports }}"
+      vars:
+        expanded_ports_yaml: >-
+          {% set ports = [] %}
+          {% for port_num in range(item.start, item.end + 1) %}
+          {% set _ = ports.append(item.fabric ~ '/' ~ (port_num | string)) %}
+          {% endfor %}
+          {{ ports | to_yaml }}
+        expanded_ports: "{{ expanded_ports_yaml | from_yaml }}"
+      loop: "{{ fi_model_defaults.supported_port_ranges.uplinks | default([]) }}"
+      loop_control:
+        label: "{{ item.fabric }}/{{ item.start }}-{{ item.fabric }}/{{ item.end }}"
+      tags: [always, compose]
+
+    - name: Expand Ethernet server port ranges for validation
+      ansible.builtin.set_fact:
+        allowed_server_ports: "{{ allowed_server_ports + expanded_ports }}"
+      vars:
+        expanded_ports_yaml: >-
+          {% set ports = [] %}
+          {% for port_num in range(item.start, item.end + 1) %}
+          {% set _ = ports.append(item.fabric ~ '/' ~ (port_num | string)) %}
+          {% endfor %}
+          {{ ports | to_yaml }}
+        expanded_ports: "{{ expanded_ports_yaml | from_yaml }}"
+      loop: "{{ fi_model_defaults.supported_port_ranges.server_ports | default([]) }}"
+      loop_control:
+        label: "{{ item.fabric }}/{{ item.start }}-{{ item.fabric }}/{{ item.end }}"
+      tags: [always, compose]
+
+    - name: Resolve deferred solution intent metadata
+      ansible.builtin.set_fact:
+        resolved_intent_name: >-
+          {{
+            solution_intent
+            | default(customer_overrides.solution_intent | default(''), true)
+          }}
+        deferred_catalog_solution_key: "{{ catalog_solution_key | default('default') }}"
+      tags: [always, compose]
+
+    - name: Compose effective onboarding settings
+      ansible.builtin.set_fact:
+        domain_profile_name: "{{ deployment_name ~ '-Domain-Profile' }}"
+        switch_control_policy_name: "{{ deployment_name ~ '-Switch-Control' }}"
+        system_qos_policy_name: "{{ deployment_name ~ '-System-QoS' }}"
+        ntp_policy_name: "{{ deployment_name ~ '-NTP' }}"
+        network_connectivity_policy_name: "{{ deployment_name ~ '-Network-Connectivity' }}"
+        port_policy_name: "{{ deployment_name ~ '-Port-Policy' }}"
+        effective_global_settings: >-
+          {{
+            domain_policy_catalog.global_settings | default({})
+            | combine(customer_overrides.global_settings | default({}), recursive=True)
+            | combine(
+                {
+                  'policy_attachments': {
+                    'switch_control_policy': deployment_name ~ '-Switch-Control',
+                    'system_qos_policy': deployment_name ~ '-System-QoS',
+                    'ntp_policy': deployment_name ~ '-NTP',
+                    'network_connectivity_policy': deployment_name ~ '-Network-Connectivity'
+                  }
+                },
+                recursive=True
+              )
+          }}
+        effective_port_defaults: >-
+          {{
+            fi_model_defaults.port_defaults
+            | combine(domain_port_catalog.port_defaults | default({}), recursive=True)
+            | combine(customer_overrides.port_defaults | default({}), recursive=True)
+          }}
+        effective_vlans: []
+        effective_vlan_groups: []
+        effective_uplink_profiles: []
+        policy_prefix: "{{ deployment_name }}"
+        port_policy_prefix: "{{ deployment_name }}"
+        configured_uplink_ports: >-
+          {{
+            port_config.uplinks
+            | default(domain_port_catalog.uplinks | default([]), true)
+          }}
+        configured_uplink_port_channels: >-
+          {{
+            port_config.uplink_port_channels
+            | default(domain_port_catalog.uplink_port_channels | default([]), true)
+          }}
+        configured_server_ports: >-
+          {{
+            port_config.server_ports
+            | default(domain_port_catalog.server_ports | default([]), true)
+          }}
+        effective_ethernet_uplink_ports: "{{ port_config.uplinks | default([]) }}"
+        effective_ethernet_uplink_port_channels: "{{ port_config.uplink_port_channels | default([]) }}"
+        effective_server_ports: "{{ port_config.server_ports | default([]) }}"
+      tags: [always, compose]
+
+    - name: Normalize effective global settings for onboarding
+      ansible.builtin.set_fact:
+        effective_global_settings: >-
+          {{
+            effective_global_settings
+            | combine(
+                {
+                  'uplink_mode': (
+                    effective_global_settings.uplink_mode
+                    | default('standard', true)
+                  ),
+                  'network_intent_mode': 'deferred'
+                },
+                recursive=True
+              )
+          }}
+      tags: [always, compose]
+
+    - name: Detect optional management policy definitions
+      ansible.builtin.set_fact:
+        ntp_policy_enabled: "{{ effective_global_settings.ntp is defined }}"
+        network_connectivity_policy_enabled: "{{ effective_global_settings.dns is defined }}"
+      tags: [always, compose]
+
+    - name: Add active management policy attachment names when defined
+      ansible.builtin.set_fact:
+        effective_global_settings: >-
+          {{
+            effective_global_settings
+            | combine(
+                {
+                  'policy_attachments': (
+                    {}
+                    | combine(
+                        (
+                          {'ntp_policy': ntp_policy_name}
+                          if ntp_policy_enabled
+                          else {}
+                        ),
+                        recursive=True
+                      )
+                    | combine(
+                        (
+                          {'network_connectivity_policy': network_connectivity_policy_name}
+                          if network_connectivity_policy_enabled
+                          else {}
+                        ),
+                        recursive=True
+                      )
+                  )
+                },
+                recursive=True
+              )
+          }}
+      tags: [always, compose]
+
+    - name: Validate customer uplink overrides are supported by FI model
+      ansible.builtin.assert:
+        that:
+          - item.port_id is defined
+          - item.port_id in allowed_uplink_ports
+        fail_msg: >-
+          Uplink port {{ item.port_id | default('undefined') }} is not valid
+          for discovered FI model {{ fi_model_resolved }}.
+      loop: "{{ configured_uplink_ports }}"
+      loop_control:
+        label: "{{ item.port_id | default('missing-port-id') }}"
+      when: configured_uplink_ports | length > 0
+      tags: [always, validate, ports]
+
+    - name: Validate uplink port channel contracts
+      ansible.builtin.assert:
+        that:
+          - item.pc_id is defined
+          - (item.pc_id | int) > 0
+          - item.member_ports is defined
+          - item.member_ports | length > 0
+          - (item.member_ports | difference(allowed_uplink_ports)) | length == 0
+        fail_msg: >-
+          Uplink port channel {{ item.name | default(item.pc_id | default('unnamed-pc')) }}
+          has an invalid pc_id or member_ports outside the allowed uplink
+          range for FI model {{ fi_model_resolved }}.
+      loop: "{{ configured_uplink_port_channels }}"
+      loop_control:
+        label: "{{ item.name | default(item.pc_id | string) }}"
+      when: configured_uplink_port_channels | length > 0
+      tags: [always, validate, ports]
+
+    - name: Validate customer server port overrides are supported by FI model
+      ansible.builtin.assert:
+        that:
+          - item.port_id is defined
+          - item.port_id in allowed_server_ports
+        fail_msg: >-
+          Server port {{ item.port_id | default('undefined') }} is not valid
+          for discovered FI model {{ fi_model_resolved }}.
+      loop: "{{ configured_server_ports }}"
+      loop_control:
+        label: "{{ item.port_id | default('missing-port-id') }}"
+      when: configured_server_ports | length > 0
+      tags: [always, validate, ports]
+
+    - name: Initialize derived policy structures
+      ansible.builtin.set_fact:
+        ethernet_network_group_policies: []
+        derived_ethernet_uplink_ports: []
+        derived_ethernet_uplink_port_channels: []
+      tags: [always, compose]
+
+    - name: Derive default uplink port channels from FI model defaults
+      ansible.builtin.set_fact:
+        derived_ethernet_uplink_port_channels: >-
+          {{
+            fi_model_defaults.port_defaults.uplink_port_channels.default
+            | default([])
+          }}
+      when:
+        - (configured_uplink_ports | length) == 0
+        - (configured_uplink_port_channels | length) == 0
+      tags: [always, compose]
+
+    - name: Initialize derived port-policy structures
+      ansible.builtin.set_fact:
+        derived_server_ports: []
+      tags: [always, compose]
+
+    - name: Build derived server-port entries from hardware defaults
+      ansible.builtin.set_fact:
+        derived_server_ports: "{{ derived_server_ports + [{'port_id': item, 'fec': normalized_server_fec, 'state': 'present'}] }}"
+      vars:
+        normalized_server_fec: >-
+          {{
+            (
+              effective_global_settings.port_policy_defaults.server_ports.fec
+              | default('Auto')
+            )
+            | regex_replace('^auto$', 'Auto')
+            | regex_replace('^cl74$', 'Cl74')
+          }}
+      loop: "{{ allowed_server_ports }}"
+      loop_control:
+        label: "{{ item }}"
+      tags: [always, compose]
+
+    - name: Merge customer server-port overrides into derived port policy
+      ansible.builtin.set_fact:
+        effective_server_ports: "{{ configured_server_ports if (configured_server_ports | length > 0) else derived_server_ports }}"
+        effective_ethernet_uplink_ports: "{{ configured_uplink_ports if (configured_uplink_ports | length > 0) else derived_ethernet_uplink_ports }}"
+        effective_ethernet_uplink_port_channels: >-
+          {{
+            configured_uplink_port_channels
+            if (configured_uplink_port_channels | length > 0)
+            else derived_ethernet_uplink_port_channels
+          }}
+      tags: [always, compose]
+
+    - name: Normalize server port IDs for Intersight module format
+      ansible.builtin.set_fact:
+        module_server_ports: "{{ module_server_ports | default([]) + [normalized_port] }}"
+      vars:
+        normalized_port: >-
+          {{
+            item
+            | combine(
+                {
+                  'port_id': (
+                    item.port_id.split('/')[1]
+                    if (
+                      (item.port_id is string)
+                      and ((item.port_id | regex_findall('/')) | length == 1)
+                    )
+                    else item.port_id
+                  )
+                },
+                recursive=True
+              )
+          }}
+      loop: "{{ effective_server_ports }}"
+      loop_control:
+        label: "{{ item.port_id }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [always, compose]
+
+    - name: Normalize Ethernet uplink port IDs for Intersight module format
+      ansible.builtin.set_fact:
+        module_ethernet_uplink_ports: "{{ module_ethernet_uplink_ports | default([]) + [normalized_port] }}"
+      vars:
+        normalized_port: >-
+          {{
+            item
+            | combine(
+                {
+                  'port_id': (
+                    item.port_id.split('/')[1]
+                    if (
+                      (item.port_id is string)
+                      and ((item.port_id | regex_findall('/')) | length == 1)
+                    )
+                    else item.port_id
+                  )
+                },
+                recursive=True
+              )
+          }}
+      loop: "{{ effective_ethernet_uplink_ports }}"
+      loop_control:
+        label: "{{ item.port_id }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [always, compose]
+
+    - name: Normalize Ethernet uplink port channel IDs for Intersight module format
+      ansible.builtin.set_fact:
+        module_ethernet_uplink_port_channels: "{{ module_ethernet_uplink_port_channels | default([]) + [normalized_pc] }}"
+      vars:
+        normalized_pc:
+          pc_id: "{{ item.pc_id | int }}"
+          admin_speed: >-
+            {{
+              item.admin_speed
+              | default(
+                  effective_global_settings.port_policy_defaults.uplink_ports.speed
+                  | default('Auto')
+                  | regex_replace('^([0-9]+G)$', '\\1bps')
+                )
+            }}
+          fec: >-
+            {{
+              item.fec
+              | default(
+                  effective_global_settings.port_policy_defaults.uplink_ports.fec
+                  | default('Auto')
+                )
+            }}
+          ports: >-
+            {%- set out = [] -%}
+            {%- for port_id in item.member_ports | default([]) -%}
+            {%- set normalized_id = (
+              port_id.split('/')[1]
+              if (
+                (port_id is string)
+                and ((port_id | regex_findall('/')) | length == 1)
+              )
+              else port_id
+            ) -%}
+            {%- set _ = out.append({'port_id': normalized_id}) -%}
+            {%- endfor -%}
+            {{ out }}
+          state: "{{ item.state | default('present') }}"
+      loop: "{{ effective_ethernet_uplink_port_channels }}"
+      loop_control:
+        label: "{{ item.name | default(item.pc_id | string) }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [always, compose]
+
+    - name: Build domain profile payload
+      ansible.builtin.set_fact:
+        domain_profile_payload:
+          metadata:
+            workflow: domain_onboarding
+            organization: "{{ organization }}"
+            deployment_name: "{{ deployment_name }}"
+            fi_model: "{{ fi_model_resolved }}"
+            fi_inventory_source: "{{ fi_inventory | map(attribute='discovery_source') | list | unique }}"
+            repository_defaults:
+              fi_defaults_file: "{{ fi_defaults_path }}"
+          fabric_interconnects: "{{ fi_inventory }}"
+          port_configuration:
+            defaults: "{{ effective_port_defaults }}"
+            overrides: "{{ port_config }}"
+            ethernet_uplink_ports: "{{ effective_ethernet_uplink_ports }}"
+            ethernet_uplink_port_channels: "{{ effective_ethernet_uplink_port_channels }}"
+            server_ports: "{{ effective_server_ports }}"
+          global_settings: "{{ effective_global_settings }}"
+          deferred_network_intent:
+            requested_solution_intent: "{{ resolved_intent_name }}"
+            catalog_solution_key: "{{ deferred_catalog_solution_key }}"
+            status: deferred
+            note: VLANs, VLAN groups, and uplink network intent are intentionally deferred to a later network provisioning workflow.
+          intersight_resource_plan: "{{ onboarding_resource_plan_yaml | from_yaml }}"
+      vars:
+        onboarding_resource_plan_yaml: |
+          - step: 1
+            resource_type: organization_lookup
+            module: cisco.intersight.intersight_rest_api
+            resource_path: /organization/Organizations
+            query_filter: "Name eq '{{ organization }}'"
+          - step: 2
+            resource_type: switch_control_policy
+            module: cisco.intersight.intersight_switch_control_policy
+            name: "{{ switch_control_policy_name }}"
+          - step: 3
+            resource_type: system_qos_policy
+            module: cisco.intersight.intersight_system_qos_policy
+            name: "{{ system_qos_policy_name }}"
+          {% if ntp_policy_enabled %}
+          - step: 4
+            resource_type: ntp_policy
+            module: cisco.intersight.intersight_ntp_policy
+            name: "{{ ntp_policy_name }}"
+          {% endif %}
+          {% if network_connectivity_policy_enabled %}
+          - step: 5
+            resource_type: network_connectivity_policy
+            module: cisco.intersight.intersight_network_connectivity_policy
+            name: "{{ network_connectivity_policy_name }}"
+          {% endif %}
+          - step: 6
+            resource_type: port_policy
+            module: cisco.intersight.intersight_port_policy
+            name: "{{ port_policy_name }}"
+          - step: 7
+            resource_type: switch_cluster_profile
+            module: cisco.intersight.intersight_rest_api
+            resource_path: /fabric/SwitchClusterProfiles
+            body_template:
+              Name: "{{ domain_profile_name }}"
+              Organization:
+                ObjectType: organization.Organization
+                Moid: <organization_moid>
+          - step: 8
+            resource_type: switch_profiles
+            module: cisco.intersight.intersight_rest_api
+            resource_path: /fabric/SwitchProfiles
+            bodies:
+              - Name: "{{ policy_prefix ~ '-A' }}"
+                SwitchClusterProfile: <switch_cluster_profile_moid>
+              - Name: "{{ policy_prefix ~ '-B' }}"
+                SwitchClusterProfile: <switch_cluster_profile_moid>
+          - step: 9
+            resource_type: switch_profile_policy_bucket
+            module: cisco.intersight.intersight_rest_api
+            resource_path_template: /fabric/SwitchProfiles/{switch_profile_moid}/PolicyBucket
+            body_template:
+              - ObjectType: fabric.PortPolicy
+                Moid: <port_policy_moid>
+              - ObjectType: fabric.SwitchControlPolicy
+                Moid: <switch_control_policy_moid>
+              - ObjectType: fabric.SystemQosPolicy
+                Moid: <system_qos_policy_moid>
+            note: >-
+              Associate baseline onboarding policies to both switch profiles
+              after the switch cluster profile and A/B switch profiles exist.
+          {% if ntp_policy_enabled or network_connectivity_policy_enabled %}
+          - step: 10
+            resource_type: deferred_management_policies
+            module: deferred
+            names:
+          {% if ntp_policy_enabled %}
+              - "{{ ntp_policy_name }}"
+          {% endif %}
+          {% if network_connectivity_policy_enabled %}
+              - "{{ network_connectivity_policy_name }}"
+          {% endif %}
+            note: >-
+              Optional management policies are created only when the
+              corresponding onboarding metadata is present, and attachment to
+              FI switch profiles is deferred until the exact domain-side
+              attachment model is confirmed.
+          {% endif %}
+      tags: [always, compose]
+
+    - name: Show effective build summary
+      ansible.builtin.debug:
+        msg:
+          resolved_intent_name: "{{ resolved_intent_name }}"
+          fi_model_resolved: "{{ fi_model_resolved }}"
+          fi_count: "{{ fi_inventory | length }}"
+          uplink_port_count: "{{ effective_ethernet_uplink_ports | length }}"
+          uplink_port_channel_count: "{{ effective_ethernet_uplink_port_channels | length }}"
+          server_port_count: "{{ effective_server_ports | length }}"
+      tags: [always, summary]
+
+    - name: Show onboarding execution mode
+      ansible.builtin.debug:
+        msg: >-
+          Domain onboarding payload is assembled. Set
+          create_domain_profile=true to create baseline Intersight policies,
+          switch profiles, and the switch cluster profile.
+      when: not (create_domain_profile | default('false') | bool)
+      tags: [create]
+
+    - name: Create switch control policy in Intersight
+      cisco.intersight.intersight_switch_control_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ switch_control_policy_name }}"
+        description: "Switch control policy for {{ deployment_name }}"
+        ethernet_switching_mode: "{{ effective_global_settings.switch_control.ethernet_switching_mode | default('end-host') }}"
+        fc_switching_mode: "{{ effective_global_settings.switch_control.fc_switching_mode | default('end-host') }}"
+        mac_aging_option: "{{ effective_global_settings.switch_control.mac_aging_option | default('default') }}"
+        vlan_port_optimization_enabled: "{{ effective_global_settings.switch_control.vlan_port_optimization_enabled | default(false) }}"
+        reserved_vlan_start_id: "{{ effective_global_settings.switch_control.reserved_vlan_start_id | default(3915) }}"
+        message_interval: "{{ effective_global_settings.switch_control.message_interval | default(15) }}"
+        recovery_action: >-
+          {{
+            'reset'
+            if (effective_global_settings.network_control.udld | default('alert')) == 'reset'
+            else 'none'
+          }}
+      when: create_domain_profile | default('false') | bool
+      register: switch_control_policy_result
+      tags: [create, policies]
+
+    - name: Create system QoS policy in Intersight
+      cisco.intersight.intersight_system_qos_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ system_qos_policy_name }}"
+        description: "System QoS policy for {{ deployment_name }}"
+        classes: >-
+          {{
+            effective_global_settings.system_qos.classes
+            | default(
+                [
+                  {'name': 'Bronze', 'admin_state': 'Enabled', 'weight': 7},
+                  {'name': 'Silver', 'admin_state': 'Enabled', 'weight': 8},
+                  {'name': 'Gold', 'admin_state': 'Enabled', 'weight': 9},
+                  {'name': 'Platinum', 'admin_state': 'Enabled', 'weight': 10},
+                  {'name': 'Best Effort', 'weight': 5},
+                  {'name': 'FC', 'weight': 5}
+                ],
+                true
+              )
+          }}
+      when: create_domain_profile | default('false') | bool
+      register: system_qos_policy_result
+      tags: [create, policies]
+
+    - name: Create NTP policy in Intersight
+      cisco.intersight.intersight_ntp_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ ntp_policy_name }}"
+        description: "NTP policy for {{ deployment_name }}"
+        enable: "{{ effective_global_settings.ntp.enable | default(true) }}"
+        ntp_servers: "{{ effective_global_settings.ntp.servers | default(omit) }}"
+        timezone: "{{ effective_global_settings.ntp.timezone | default(omit) }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - ntp_policy_enabled
+      register: ntp_policy_result
+      tags: [create, policies]
+
+    - name: Create network connectivity policy in Intersight
+      cisco.intersight.intersight_network_connectivity_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ network_connectivity_policy_name }}"
+        description: "Network connectivity policy for {{ deployment_name }}"
+        enable_dynamic_dns: "{{ effective_global_settings.dns.enable_dynamic_dns | default(false) }}"
+        dynamic_dns_domain: "{{ effective_global_settings.dns.dynamic_dns_domain | default(omit) }}"
+        enable_ipv4_dns_from_dhcp: "{{ effective_global_settings.dns.enable_ipv4_dns_from_dhcp | default(false) }}"
+        preferred_ipv4_dns_server: "{{ effective_global_settings.dns.preferred_ipv4_dns_server | default(omit) }}"
+        alternate_ipv4_dns_server: "{{ effective_global_settings.dns.alternate_ipv4_dns_server | default(omit) }}"
+        enable_ipv6: "{{ effective_global_settings.dns.enable_ipv6 | default(false) }}"
+        enable_ipv6_dns_from_dhcp: "{{ effective_global_settings.dns.enable_ipv6_dns_from_dhcp | default(false) }}"
+        preferred_ipv6_dns_server: "{{ effective_global_settings.dns.preferred_ipv6_dns_server | default(omit) }}"
+        alternate_ipv6_dns_server: "{{ effective_global_settings.dns.alternate_ipv6_dns_server | default(omit) }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - network_connectivity_policy_enabled
+      register: network_connectivity_policy_result
+      tags: [create, policies]
+
+    - name: Create port policy in Intersight
+      cisco.intersight.intersight_port_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ port_policy_name }}"
+        description: "Port policy for {{ deployment_name }} domain onboarding"
+        device_model: "{{ fi_model_resolved }}"
+        ethernet_uplink_ports: "{{ module_ethernet_uplink_ports | default([]) }}"
+        ethernet_uplink_port_channels: "{{ module_ethernet_uplink_port_channels | default([]) }}"
+        server_ports: "{{ module_server_ports | default([]) }}"
+      when: create_domain_profile | default('false') | bool
+      register: port_policy_result
+      tags: [create, policies]
+
+    - name: Look up created policy objects by name
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: "{{ item.resource_path }}"
+        query_params:
+          $filter: "Name eq '{{ item.name }}'"
+      loop:
+        - key: port_policy
+          name: "{{ port_policy_name }}"
+          resource_path: /fabric/PortPolicies
+        - key: switch_control_policy
+          name: "{{ switch_control_policy_name }}"
+          resource_path: /fabric/SwitchControlPolicies
+        - key: system_qos_policy
+          name: "{{ system_qos_policy_name }}"
+          resource_path: /fabric/SystemQosPolicies
+        - key: ntp_policy
+          name: "{{ ntp_policy_name }}"
+          resource_path: /ntp/Policies
+          enabled: "{{ ntp_policy_enabled }}"
+        - key: network_connectivity_policy
+          name: "{{ network_connectivity_policy_name }}"
+          resource_path: /networkconfig/Policies
+          enabled: "{{ network_connectivity_policy_enabled }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - item.enabled | default(true) | bool
+      register: named_policy_lookup_results
+      tags: [create, domain]
+
+    - name: Validate named policy lookups returned Moids
+      ansible.builtin.assert:
+        that:
+          - item.api_response.Moid is defined
+          - item.api_response.Moid | length > 0
+        fail_msg: >-
+          Could not resolve {{ item.item.key }} named {{ item.item.name }}
+          after policy creation.
+      loop: "{{ named_policy_lookup_results.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - not (item.skipped | default(false))
+      tags: [create, domain]
+
+    - name: Capture resource Moids for domain-profile creation
+      ansible.builtin.set_fact:
+        organization_moid: "{{ organization_lookup_result.api_response.Moid }}"
+        port_policy_moid: >-
+          {{
+            (named_policy_lookup_results.results
+             | selectattr('item.key', 'equalto', 'port_policy')
+             | map(attribute='api_response')
+             | map(attribute='Moid')
+             | list
+             | first)
+          }}
+        switch_control_policy_moid: >-
+          {{
+            (named_policy_lookup_results.results
+             | selectattr('item.key', 'equalto', 'switch_control_policy')
+             | map(attribute='api_response')
+             | map(attribute='Moid')
+             | list
+             | first)
+          }}
+        system_qos_policy_moid: >-
+          {{
+            (named_policy_lookup_results.results
+             | selectattr('item.key', 'equalto', 'system_qos_policy')
+             | map(attribute='api_response')
+             | map(attribute='Moid')
+             | list
+             | first)
+          }}
+        ntp_policy_moid: >-
+          {{
+            (
+              named_policy_lookup_results.results
+              | default([])
+              | selectattr('item.key', 'equalto', 'ntp_policy')
+              | map(attribute='api_response')
+              | map(attribute='Moid')
+              | list
+              | first
+            )
+            if ntp_policy_enabled
+            else ''
+          }}
+        network_connectivity_policy_moid: >-
+          {{
+            (
+              named_policy_lookup_results.results
+              | default([])
+              | selectattr('item.key', 'equalto', 'network_connectivity_policy')
+              | map(attribute='api_response')
+              | map(attribute='Moid')
+              | list
+              | first
+            )
+            if network_connectivity_policy_enabled
+            else ''
+          }}
+      when: create_domain_profile | default('false') | bool
+      tags: [create, domain]
+
+    - name: Create switch cluster profile in Intersight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchClusterProfiles
+        query_params:
+          $filter: "Name eq '{{ domain_profile_name }}'"
+        api_body:
+          Name: "{{ domain_profile_name }}"
+          ObjectType: fabric.SwitchClusterProfile
+          ClassId: fabric.SwitchClusterProfile
+          Organization:
+            ObjectType: organization.Organization
+            ClassId: mo.MoRef
+            Moid: "{{ organization_moid }}"
+      when: create_domain_profile | default('false') | bool
+      register: switch_cluster_profile_result
+      tags: [create, domain]
+
+    - name: Capture switch cluster profile Moid
+      ansible.builtin.set_fact:
+        switch_cluster_profile_moid: "{{ switch_cluster_profile_result.api_response.Moid }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [create, domain]
+
+    - name: Create switch profiles in Intersight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ policy_prefix }}-{{ item.switch_id }}'"
+        api_body:
+          Name: "{{ policy_prefix }}-{{ item.switch_id }}"
+          ObjectType: fabric.SwitchProfile
+          ClassId: fabric.SwitchProfile
+          SwitchId: "{{ item.switch_id }}"
+          SwitchClusterProfile:
+            ObjectType: fabric.SwitchClusterProfile
+            ClassId: mo.MoRef
+            Moid: "{{ switch_cluster_profile_moid }}"
+      loop:
+        - switch_id: A
+        - switch_id: B
+      loop_control:
+        label: "{{ item.switch_id }}"
+      when: create_domain_profile | default('false') | bool
+      register: switch_profile_results
+      tags: [create, domain]
+
+    - name: Build desired switch profile policy attachments
+      ansible.builtin.set_fact:
+        desired_switch_policy_attachments:
+          - ObjectType: fabric.PortPolicy
+            ClassId: mo.MoRef
+            Moid: "{{ port_policy_moid }}"
+          - ObjectType: fabric.SwitchControlPolicy
+            ClassId: mo.MoRef
+            Moid: "{{ switch_control_policy_moid }}"
+          - ObjectType: fabric.SystemQosPolicy
+            ClassId: mo.MoRef
+            Moid: "{{ system_qos_policy_moid }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [create, domain]
+
+    - name: Build desired switch-to-FI assignments
+      ansible.builtin.set_fact:
+        desired_switch_assignments:
+          - switch_profile_name: "{{ policy_prefix }}-A"
+            switch_profile_moid: >-
+              {{
+                (switch_profile_results.results
+                 | selectattr('item.switch_id', 'equalto', 'A')
+                 | map(attribute='api_response')
+                 | map(attribute='Moid')
+                 | list
+                 | first)
+              }}
+            switch_id: A
+            assigned_switch_moid: "{{ fi_inventory[0].moid }}"
+            assigned_switch_name: "{{ fi_inventory[0].intersight_name | default(fi_inventory[0].name | default(fi_inventory[0].serial_number)) }}"
+          - switch_profile_name: "{{ policy_prefix }}-B"
+            switch_profile_moid: >-
+              {{
+                (switch_profile_results.results
+                 | selectattr('item.switch_id', 'equalto', 'B')
+                 | map(attribute='api_response')
+                 | map(attribute='Moid')
+                 | list
+                 | first)
+              }}
+            switch_id: B
+            assigned_switch_moid: "{{ fi_inventory[1].moid }}"
+            assigned_switch_name: "{{ fi_inventory[1].intersight_name | default(fi_inventory[1].name | default(fi_inventory[1].serial_number)) }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - fi_inventory | length >= 2
+      tags: [create, domain]
+
+    - name: Build missing policy attachments per switch profile
+      ansible.builtin.set_fact:
+        switch_policy_bucket_updates: "{{ (switch_policy_bucket_updates | default([])) + [bucket_update] }}"
+      vars:
+        existing_attachment_moids: "{{ item.api_response.PolicyBucket | default([]) | map(attribute='Moid') | list }}"
+        missing_attachments: "{{ desired_switch_policy_attachments | rejectattr('Moid', 'in', existing_attachment_moids) | list }}"
+        bucket_update:
+          switch_profile_name: "{{ item.api_response.Name | default(policy_prefix ~ '-' ~ item.item.switch_id) }}"
+          switch_profile_moid: "{{ item.api_response.Moid }}"
+          missing_attachments: "{{ missing_attachments }}"
+      loop: "{{ switch_profile_results.results }}"
+      loop_control:
+        label: "{{ item.api_response.Name | default(policy_prefix ~ '-' ~ item.item.switch_id) }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [create, domain]
+
+    - name: Attach missing policies to switch profiles
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: "/fabric/SwitchProfiles/{{ item.switch_profile_moid }}/PolicyBucket"
+        update_method: post
+        list_body: "{{ item.missing_attachments }}"
+      loop: "{{ switch_policy_bucket_updates | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - item.missing_attachments | length > 0
+      register: policy_bucket_attach_results
+      tags: [create, domain]
+
+    - name: Assign switch profiles to discovered fabric interconnects
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+        api_body:
+          Name: "{{ item.switch_profile_name }}"
+          ObjectType: fabric.SwitchProfile
+          ClassId: fabric.SwitchProfile
+          SwitchId: "{{ item.switch_id }}"
+          AssignedSwitch:
+            ObjectType: network.Element
+            ClassId: mo.MoRef
+            Moid: "{{ item.assigned_switch_moid }}"
+      loop: "{{ desired_switch_assignments | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }} -> {{ item.assigned_switch_name }}"
+      when: create_domain_profile | default('false') | bool
+      register: switch_assignment_results
+      tags: [create, deploy]
+
+    - name: Trigger switch profile deployment
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+        api_body:
+          Name: "{{ item.switch_profile_name }}"
+          ObjectType: fabric.SwitchProfile
+          ClassId: fabric.SwitchProfile
+          SwitchId: "{{ item.switch_id }}"
+          AssignedSwitch:
+            ObjectType: network.Element
+            ClassId: mo.MoRef
+            Moid: "{{ item.assigned_switch_moid }}"
+          Action: Deploy
+      loop: "{{ desired_switch_assignments | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - >
+          (
+            switch_assignment_results.results
+            | selectattr('item.switch_profile_name', 'equalto', item.switch_profile_name)
+            | map(attribute='api_response')
+            | map(attribute='ConfigContext')
+            | map(attribute='ConfigState')
+            | list
+            | first
+            | default('Not-assigned')
+          ) not in ['Validating', 'Configuring', 'Associated']
+      register: switch_deploy_results
+      tags: [create, deploy]
+
+    - name: Wait for switch profiles to reach a terminal deployment state
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+      loop: "{{ desired_switch_assignments | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when: create_domain_profile | default('false') | bool
+      register: final_switch_profile_status_results
+      until: >-
+        final_switch_profile_status_results.api_response.ConfigContext.ConfigState
+        in ['Associated', 'Failed', 'Inconsistent']
+      retries: "{{ switch_profile_wait_retries | default(20) }}"
+      delay: "{{ switch_profile_wait_delay | default(15) }}"
+      tags: [create, deploy]
+
+    - name: Build switch profile workflow references
+      ansible.builtin.set_fact:
+        switch_profile_workflow_refs: "{{ switch_profile_workflow_refs | default([]) + workflow_ref_entries }}"
+      vars:
+        deploy_match: >-
+          {{
+            switch_deploy_results.results
+            | default([])
+            | selectattr('item.switch_profile_name', 'equalto', item.switch_profile_name)
+            | list
+            | first
+          }}
+        assignment_match: >-
+          {{
+            switch_assignment_results.results
+            | default([])
+            | selectattr('item.switch_profile_name', 'equalto', item.switch_profile_name)
+            | list
+            | first
+          }}
+        workflow_sources: >-
+          {{
+            (
+              deploy_match.api_response.RunningWorkflows
+              if (
+                deploy_match is defined
+                and deploy_match.api_response is defined
+                and deploy_match.api_response.RunningWorkflows is defined
+                and (deploy_match.api_response.RunningWorkflows | length > 0)
+              )
+              else (
+                assignment_match.api_response.RunningWorkflows
+                if (
+                  assignment_match is defined
+                  and assignment_match.api_response is defined
+                  and assignment_match.api_response.RunningWorkflows is defined
+                )
+                else []
+              )
+            )
+          }}
+        workflow_ref_entries: >-
+          {{
+            workflow_sources
+            | map('combine', {'switch_profile_name': item.switch_profile_name})
+            | list
+          }}
+      loop: "{{ desired_switch_assignments | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [create, deploy]
+
+    - name: Query workflow details for switch profile deployments
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: "/workflow/WorkflowInfos/{{ item.Moid }}"
+      loop: "{{ switch_profile_workflow_refs | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}:{{ item.Moid }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - (switch_profile_workflow_refs | default([]) | length) > 0
+      register: switch_profile_workflow_details
+      tags: [create, deploy]
+
+    - name: Query config results for final switch profile states
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: "/fabric/ConfigResults/{{ item.api_response.ConfigResult.Moid }}"
+      loop: "{{ final_switch_profile_status_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.switch_profile_name }}"
+      when:
+        - create_domain_profile | default('false') | bool
+        - item.api_response.ConfigResult is defined
+        - item.api_response.ConfigResult.Moid is defined
+      register: switch_profile_config_result_details
+      tags: [create, deploy]
+
+    - name: Validate switch profiles reached Associated state
+      ansible.builtin.assert:
+        that:
+          - item.api_response.ConfigContext.ConfigState == 'Associated'
+        fail_msg: >-
+          Switch profile {{ item.item.switch_profile_name }} did not finish in
+          Associated state. Final state was
+          {{ item.api_response.ConfigContext.ConfigState | default('unknown') }}
+          with oper state
+          {{ item.api_response.ConfigContext.OperState | default('unknown') }}.
+          ConfigResult Moid:
+          {{ item.api_response.ConfigResult.Moid | default('none') }}.
+      loop: "{{ final_switch_profile_status_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.switch_profile_name }}"
+      when: create_domain_profile | default('false') | bool
+      tags: [create, deploy]
+
+    - name: Build TAC handoff details
+      ansible.builtin.set_fact:
+        tac_handoff:
+          deployment_name: "{{ deployment_name }}"
+          organization: "{{ organization }}"
+          solution_intent: "{{ resolved_intent_name | default('') }}"
+          fi_model: "{{ fi_model_resolved }}"
+          switch_profiles: >-
+            {{
+              (final_switch_profile_status_results.results | default([]))
+              | map(attribute='api_response')
+              | map(
+                  'combine',
+                  {
+                    'config_result_moid': '',
+                    'config_state': '',
+                    'oper_state': ''
+                  }
+                )
+              | list
+            }}
+          trace_ids:
+            switch_profile_results: "{{ switch_profile_results.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+            switch_assignments: "{{ switch_assignment_results.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+            switch_deploy: "{{ switch_deploy_results.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+            final_switch_status: "{{ final_switch_profile_status_results.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+            workflow_details: "{{ switch_profile_workflow_details.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+            config_results: "{{ switch_profile_config_result_details.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+      vars:
+        _unused: ""
+      tags: [create, deploy]
+
+    - name: Normalize TAC handoff switch profile details
+      ansible.builtin.set_fact:
+        tac_handoff:
+          deployment_name: "{{ tac_handoff.deployment_name }}"
+          organization: "{{ tac_handoff.organization }}"
+          solution_intent: "{{ tac_handoff.solution_intent }}"
+          fi_model: "{{ tac_handoff.fi_model }}"
+          switch_profiles: >-
+            {%- set out = [] -%}
+            {%- for item in final_switch_profile_status_results.results | default([]) -%}
+            {%- set profile = item.api_response -%}
+            {%- set _ = out.append({
+              'name': profile.Name | default(''),
+              'moid': profile.Moid | default(''),
+              'switch_id': profile.SwitchId | default(''),
+              'config_state': profile.ConfigContext.ConfigState | default(''),
+              'oper_state': profile.ConfigContext.OperState | default(''),
+              'error_state': profile.ConfigContext.ErrorState | default(''),
+              'config_result_moid': profile.ConfigResult.Moid | default(''),
+              'trace_id': item.trace_id | default(''),
+              'assigned_switch_moid': profile.AssignedSwitch.Moid | default(''),
+              'associated_switch_moid': profile.AssociatedSwitch.Moid | default('')
+            }) -%}
+            {%- endfor -%}
+            {{ out }}
+          trace_ids: "{{ tac_handoff.trace_ids }}"
+      tags: [create, deploy]
+
+    - name: Export outputs to Torque
+      torque.collections.export_torque_outputs:
+        outputs:
+          validations_passed: true
+          solution_intent_resolved: "{{ resolved_intent_name }}"
+          fi_model_resolved: "{{ fi_model_resolved }}"
+          fi_inventory_json: "{{ fi_inventory | to_json }}"
+          domain_profile_payload_json: "{{ domain_profile_payload | to_json }}"
+          uplink_profiles_json: "{{ effective_uplink_profiles | to_json }}"
+          intersight_resource_plan_json: "{{ domain_profile_payload.intersight_resource_plan | to_json }}"
+          ethernet_network_group_policies_json: "{{ ethernet_network_group_policies | to_json }}"
+          effective_ethernet_uplink_ports_json: "{{ effective_ethernet_uplink_ports | to_json }}"
+          effective_ethernet_uplink_port_channels_json: "{{ effective_ethernet_uplink_port_channels | to_json }}"
+          effective_server_ports_json: "{{ effective_server_ports | to_json }}"
+          vlans_json: "{{ effective_vlans | to_json }}"
+          vlan_groups_json: "{{ effective_vlan_groups | to_json }}"
+          port_defaults_json: "{{ effective_port_defaults | to_json }}"
+          switch_cluster_profile_moid: "{{ switch_cluster_profile_moid | default('') }}"
+          switch_profile_results_json: "{{ switch_profile_results.results | default([]) | to_json }}"
+          final_switch_profile_status_json: "{{ final_switch_profile_status_results.results | default([]) | to_json }}"
+          switch_profile_workflow_refs_json: "{{ switch_profile_workflow_refs | default([]) | to_json }}"
+          switch_profile_workflow_details_json: "{{ switch_profile_workflow_details.results | default([]) | to_json }}"
+          switch_profile_config_result_details_json: "{{ switch_profile_config_result_details.results | default([]) | to_json }}"
+          intersight_trace_ids_json: "{{ tac_handoff.trace_ids | default({}) | to_json }}"
+          tac_handoff_json: "{{ tac_handoff | default({}) | to_json }}"
+      delegate_to: localhost
+      run_once: true
+      tags: always
+      ignore_errors: true

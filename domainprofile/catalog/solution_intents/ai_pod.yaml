@@ -1,0 +1,50 @@
+---
+vlans:
+  - id: 300
+    name: ai-mgmt
+  - id: 310
+    name: ai-storage
+  - id: 320
+    name: ai-training
+  - id: 330
+    name: ai-inference
+vlan_groups:
+  - name: ai-fabric
+    vlans: [300, 310, 320, 330]
+global_settings:
+  port_policy_defaults:
+    uplink_ports:
+      role: ethernet-uplink
+      speed: 100G
+      admin_state: enabled
+    server_ports:
+      role: server
+      speed: 100G
+      fec: rs-fec
+  network_control:
+    cdp_enabled: true
+    lldp_enabled: true
+    udld: alert
+  policy_attachments:
+    ethernet_network_control_policy: ai-eth-ncp
+    ethernet_qos_policy: ai-eth-qos
+    flow_control_policy: ai-flow-control
+uplink_profiles:
+  - name: fabric-a-ai
+    fabric: A
+    role: ethernet-uplink
+    target_ports:
+      - "1/41-1/48"
+    vlan_groups:
+      - ai-fabric
+    native_vlan: 300
+    admin_state: enabled
+  - name: fabric-b-ai
+    fabric: B
+    role: ethernet-uplink
+    target_ports:
+      - "1/57-1/64"
+    vlan_groups:
+      - ai-fabric
+    native_vlan: 300
+    admin_state: enabled

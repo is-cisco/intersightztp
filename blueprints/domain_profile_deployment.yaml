@@ -1,0 +1,109 @@
+spec_version: 2
+description: Cisco Intersight domain onboarding foundation with later network intent provisioning
+inputs:
+  agent:
+    type: agent
+  api_key_id:
+    type: string
+    sensitive: true
+  api_private_key:
+    type: string
+    sensitive: true
+  api_uri:
+    type: string
+    default: "https://intersight.com/api/v1"
+  fi_devices_json:
+    type: string
+    description: JSON array of fabric interconnect devices with serial numbers
+  deployment_name:
+    type: string
+  customer_overrides_json:
+    type: string
+    default: "{}"
+  port_catalog_key:
+    type: string
+    default: ""
+  port_config_yaml:
+    type: string
+    default: "{}"
+  organization:
+    type: string
+
+outputs:
+  validations_passed:
+    value: '{{ .grains.domain_profile_deployment.outputs.validations_passed }}'
+  solution_intent_resolved:
+    value: '{{ .grains.domain_profile_deployment.outputs.solution_intent_resolved }}'
+  fi_model_resolved:
+    value: '{{ .grains.domain_profile_deployment.outputs.fi_model_resolved }}'
+  fi_inventory_json:
+    value: '{{ .grains.domain_profile_deployment.outputs.fi_inventory_json }}'
+  domain_profile_payload_json:
+    value: '{{ .grains.domain_profile_deployment.outputs.domain_profile_payload_json }}'
+  effective_ethernet_uplink_port_channels_json:
+    value: '{{ .grains.domain_profile_deployment.outputs.effective_ethernet_uplink_port_channels_json }}'
+  uplink_profiles_json:
+    value: '{{ .grains.domain_profile_deployment.outputs.uplink_profiles_json }}'
+  intersight_resource_plan_json:
+    value: '{{ .grains.domain_profile_deployment.outputs.intersight_resource_plan_json }}'
+  intersight_trace_ids_json:
+    value: '{{ .grains.domain_profile_deployment.outputs.intersight_trace_ids_json }}'
+  tac_handoff_json:
+    value: '{{ .grains.domain_profile_deployment.outputs.tac_handoff_json }}'
+
+grains:
+  bootstrap_collections:
+    kind: ansible
+    spec:
+      source:
+        store: intersightztp
+        path: ansible/bootstrap_collections/playbook.yaml
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+  domain_profile_deployment:
+    kind: ansible
+    depends-on: bootstrap_collections
+    spec:
+      source:
+        store: intersightztp
+        path: domainprofile/ansible/domain_profile_deployment/playbook.yaml
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+          vars:
+            api_key_id: '{{ .inputs.api_key_id }}'
+            api_private_key: '{{ .inputs.api_private_key }}'
+            api_uri: '{{ .inputs.api_uri }}'
+            validate_certs: 'false'
+      inputs:
+        - fi_devices_json: '{{ .inputs.fi_devices_json }}'
+        - deployment_name: '{{ .inputs.deployment_name }}'
+        - solution_intent: ''
+        - catalog_solution_key: 'default'
+        - customer_overrides_json: '{{ .inputs.customer_overrides_json }}'
+        - port_catalog_key: '{{ .inputs.port_catalog_key }}'
+        - port_config_yaml: '{{ .inputs.port_config_yaml }}'
+        - organization: '{{ .inputs.organization }}'
+        - create_domain_profile: 'true'
+      outputs:
+        - validations_passed
+        - solution_intent_resolved
+        - fi_model_resolved
+        - fi_inventory_json
+        - domain_profile_payload_json
+        - effective_ethernet_uplink_port_channels_json
+        - uplink_profiles_json
+        - intersight_resource_plan_json
+        - intersight_trace_ids_json
+        - tac_handoff_json
+      on-destroy:
+        source:
+          store: intersightztp
+          path: domainprofile/ansible/domain_profile_deployment/teardown.yaml

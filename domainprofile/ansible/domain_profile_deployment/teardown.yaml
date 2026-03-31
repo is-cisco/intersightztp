@@ -1,0 +1,178 @@
+---
+- name: Teardown Cisco Intersight domain profile deployment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    api_info: &api_info
+      api_private_key: "{{ api_private_key }}"
+      api_key_id: "{{ api_key_id }}"
+      api_uri: "{{ api_uri | default(omit) }}"
+      validate_certs: "{{ validate_certs | default(omit) }}"
+
+  tasks:
+    - name: Validate teardown inputs
+      ansible.builtin.assert:
+        that:
+          - api_key_id | default('') | length > 0
+          - api_private_key | default('') | length > 0
+          - organization | default('') | length > 0
+          - deployment_name | default('') | length > 0
+        fail_msg: >-
+          Teardown requires api_key_id, api_private_key, organization,
+          and deployment_name.
+      tags: [always, validate]
+
+    - name: Compose effective teardown naming
+      ansible.builtin.set_fact:
+        policy_prefix: "{{ deployment_name }}"
+        domain_profile_name: "{{ deployment_name ~ '-Domain-Profile' }}"
+        switch_control_policy_name: "{{ deployment_name ~ '-Switch-Control' }}"
+        system_qos_policy_name: "{{ deployment_name ~ '-System-QoS' }}"
+        ntp_policy_name: "{{ deployment_name ~ '-NTP' }}"
+        network_connectivity_policy_name: "{{ deployment_name ~ '-Network-Connectivity' }}"
+        port_policy_name: "{{ deployment_name ~ '-Port-Policy' }}"
+      tags: [always]
+
+    - name: Look up switch cluster profile for teardown
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        state: present
+        resource_path: /fabric/SwitchClusterProfiles
+        query_params:
+          $filter: "Name eq '{{ domain_profile_name }}'"
+      register: switch_cluster_profile_lookup
+      tags: [destroy, domain]
+
+    - name: Unassign switch profiles
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        state: present
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ policy_prefix }}-{{ item }}'"
+        api_body:
+          Name: "{{ policy_prefix }}-{{ item }}"
+          ObjectType: fabric.SwitchProfile
+          ClassId: fabric.SwitchProfile
+          SwitchId: "{{ item }}"
+          SwitchClusterProfile:
+            ObjectType: fabric.SwitchClusterProfile
+            ClassId: mo.MoRef
+            Moid: "{{ switch_cluster_profile_lookup.api_response.Moid }}"
+          Action: Unassign
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ policy_prefix }}-{{ item }}"
+      when: switch_cluster_profile_lookup.api_response.Moid is defined
+      tags: [destroy, domain]
+
+    - name: Wait for switch profiles to become unassigned
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        state: present
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ policy_prefix }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ policy_prefix }}-{{ item }}"
+      register: switch_profile_unassign_wait
+      until: >-
+        (
+          switch_profile_unassign_wait.api_response.Moid is not defined
+        )
+        or
+        (
+          switch_profile_unassign_wait.api_response.ConfigContext is defined
+          and
+          switch_profile_unassign_wait.api_response.ConfigContext.ConfigState
+          in ['Not-assigned', 'Failed']
+        )
+      retries: 20
+      delay: 15
+      tags: [destroy, domain]
+
+    - name: Delete switch profiles
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        state: absent
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ policy_prefix }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ policy_prefix }}-{{ item }}"
+      tags: [destroy, domain]
+
+    - name: Delete switch cluster profile
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        state: absent
+        resource_path: /fabric/SwitchClusterProfiles
+        query_params:
+          $filter: "Name eq '{{ domain_profile_name }}'"
+      tags: [destroy, domain]
+
+    - name: Delete port policy
+      cisco.intersight.intersight_port_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ port_policy_name }}"
+      tags: [destroy, policies]
+
+    - name: Delete switch control policy
+      cisco.intersight.intersight_switch_control_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ switch_control_policy_name }}"
+      tags: [destroy, policies]
+
+    - name: Delete system QoS policy
+      cisco.intersight.intersight_system_qos_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ system_qos_policy_name }}"
+      tags: [destroy, policies]
+
+    - name: Delete NTP policy
+      cisco.intersight.intersight_ntp_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ ntp_policy_name }}"
+      tags: [destroy, policies]
+
+    - name: Delete network connectivity policy
+      cisco.intersight.intersight_network_connectivity_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ network_connectivity_policy_name }}"
+      tags: [destroy, policies]
+
+    - name: Delete SNMP policy
+      cisco.intersight.intersight_snmp_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ policy_prefix }}-snmp"
+      tags: [destroy, policies]
+
+    - name: Delete legacy flow control policy
+      cisco.intersight.intersight_flow_control_policy:
+        <<: *api_info
+        state: absent
+        organization: "{{ organization }}"
+        name: "{{ policy_prefix }}-flow-control"
+      tags: [destroy, policies]
