@@ -743,23 +743,29 @@
       loop_control:
         label: "{{ item.name }}"
       vars:
-        vlan_api_body:
-          ClassId: fabric.Vlan
-          ObjectType: fabric.Vlan
-          Name: "{{ item.name }}"
-          VlanId: "{{ item.vlan_id | int }}"
-          AutoAllowOnUplinks: "{{ item.auto_allow_on_uplinks | bool }}"
-          IsNative: "{{ item.is_native | bool }}"
-          SharingType: None
-          PrimaryVlanId: 0
-          EthNetworkPolicy:
-            ClassId: mo.MoRef
-            ObjectType: fabric.EthNetworkPolicy
-            Moid: "{{ vlan_policy_moid }}"
-          MulticastPolicy:
-            ClassId: mo.MoRef
-            ObjectType: fabric.MulticastPolicy
-            Moid: "{{ multicast_policy_moid }}"
+        vlan_api_body: >-
+          {{
+            {
+              'ClassId': 'fabric.Vlan',
+              'ObjectType': 'fabric.Vlan',
+              'Name': item.name,
+              'VlanId': (item.vlan_id | int),
+              'AutoAllowOnUplinks': (item.auto_allow_on_uplinks | bool),
+              'IsNative': (item.is_native | bool),
+              'SharingType': 'None',
+              'PrimaryVlanId': 0,
+              'EthNetworkPolicy': {
+                'ClassId': 'mo.MoRef',
+                'ObjectType': 'fabric.EthNetworkPolicy',
+                'Moid': vlan_policy_moid
+              },
+              'MulticastPolicy': {
+                'ClassId': 'mo.MoRef',
+                'ObjectType': 'fabric.MulticastPolicy',
+                'Moid': multicast_policy_moid
+              }
+            }
+          }}
       when: create_network_intent | default('false') | bool
       register: named_vlan_results
       tags: [create, policies]
