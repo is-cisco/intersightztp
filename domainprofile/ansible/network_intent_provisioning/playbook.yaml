@@ -560,11 +560,20 @@
             | map(attribute='native_vlan')
             | list
           }}
+        native_vlan_for_group: >-
+          {{
+            (native_vlan_candidates | first)
+            if (
+              (native_vlan_candidates | length > 0)
+              and ((native_vlan_candidates | first | int) in (item.vlans | map('int') | list))
+            )
+            else omit
+          }}
         group_policy:
           name: "{{ policy_prefix }}-{{ item.name }}"
           description: "Ethernet network group for {{ item.name }}"
           allowed_vlans: "{{ item.vlans | map('string') | join(',') }}"
-          native_vlan: "{{ (native_vlan_candidates | first) if (native_vlan_candidates | length > 0) else omit }}"
+          native_vlan: "{{ native_vlan_for_group }}"
       loop: "{{ effective_vlan_groups }}"
       loop_control:
         label: "{{ item.name }}"
