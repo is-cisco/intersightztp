@@ -12,20 +12,6 @@
         if (devices_yaml | default('') | trim | length) > 0
         else default_devices_yaml
       }}
-    wait_for_readiness_normalized: >-
-      {{
-        (wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes']
-      }}
-    readiness_poll_interval_normalized: "{{ readiness_poll_interval | default(30) | int }}"
-    readiness_max_attempts_normalized: >-
-      {{
-        (
-          readiness_max_attempts | default(20)
-          if ((wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes'])
-          else 1
-        ) | int
-      }}
-
     default_devices_yaml: |
       devices: []
 
@@ -59,6 +45,14 @@
       }
 
   pre_tasks:
+    - name: Normalize wait and polling inputs
+      ansible.builtin.set_fact:
+        wait_for_readiness_normalized: "{{ (wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes'] }}"
+        readiness_poll_interval_normalized: "{{ readiness_poll_interval | default(30) | int }}"
+        readiness_max_attempts_normalized: "{{ ((readiness_max_attempts | default(20)) if ((wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes']) else 1) | int }}"
+      changed_when: false
+      tags: [always, validate, precheck]
+
     - name: Validate required credential inputs
       ansible.builtin.assert:
         that:
