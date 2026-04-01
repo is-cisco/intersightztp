@@ -41,6 +41,17 @@
         requirements: "{{ playbook_dir }}/../requirements.txt"
       tags: [always, precheck]
 
+    - name: Show cryptography install
+      ansible.builtin.command: python3 -m pip show cryptography
+      register: cryptography_show
+      changed_when: false
+      tags: [always, precheck]
+
+    - name: Print cryptography install
+      ansible.builtin.debug:
+        var: cryptography_show.stdout_lines
+      tags: [always, precheck]
+
     - name: Normalize Intersight private key input
       ansible.builtin.set_fact:
         api_private_key_normalized: "{{ normalized_api_private_key }}"

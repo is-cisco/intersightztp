@@ -73,6 +73,7 @@ grains:
         store: intersightztp
         path: devicesreadiness/ansible/devices_readiness/playbook.yaml
         # Match the modular repo layout by keeping grains under the product folder and using a concrete playbook path.
+      command-arguments: -vvv
       agent:
         name: '{{ .inputs.agent }}'
       inventory-file:
