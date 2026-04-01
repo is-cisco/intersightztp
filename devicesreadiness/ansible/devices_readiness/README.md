@@ -145,7 +145,7 @@ grains:
     kind: ansible
     spec:
       source:
-        store: local
+        store: intersightztp
         path: devicesreadiness/ansible/devices_readiness/playbook.yaml
       inventory-file:
         localhost:
@@ -168,11 +168,13 @@ grains:
         - readiness_success
         - missing_devices_json
         - not_ready_devices_json
-      on-destroy:
-        - path: devicesreadiness/ansible/devices_readiness/teardown.yaml
-          inventory-file:
-            localhost:
-              hosts:
-                localhost:
-                  ansible_connection: local
+    on-destroy:
+      - source:
+          store: intersightztp
+          path: devicesreadiness/ansible/devices_readiness/teardown.yaml
+        inventory-file:
+          localhost:
+            hosts:
+              localhost:
+                ansible_connection: local
 ```
