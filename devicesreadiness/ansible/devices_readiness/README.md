@@ -51,6 +51,8 @@ For Torque, the blueprint should point directly to `devicesreadiness/ansible/dev
 
 Preferred input is YAML passed as a string through `devices_yaml`.
 
+The grain also accepts the same payload when launch tooling sends it as a single string with escaped newline sequences such as `\n`.
+
 ```yaml
 devices:
   - category: Rack

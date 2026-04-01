@@ -12,6 +12,12 @@
         if (devices_yaml | default('') | trim | length) > 0
         else default_devices_yaml
       }}
+    devices_yaml_parseable: >-
+      {{
+        devices_yaml_normalized
+        | regex_replace('\\r\\n', '\n')
+        | regex_replace('\\n', '\n')
+      }}
     default_devices_yaml: |
       devices: []
 
@@ -86,7 +92,7 @@
 
     - name: Parse requested input payloads
       ansible.builtin.set_fact:
-        devices_payload: "{{ devices_yaml_normalized | from_yaml }}"
+        devices_payload: "{{ devices_yaml_parseable | from_yaml }}"
         category_rules: "{{ default_category_rules_json | from_json }}"
       changed_when: false
       tags: [always, validate, precheck]
