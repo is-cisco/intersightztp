@@ -28,16 +28,6 @@ inputs:
     type: string
     title: Devices YAML
     description: Preferred YAML payload describing devices and Fabric Interconnect pair entities
-  devices_json:
-    type: string
-    title: Devices JSON
-    default: ""
-    description: Optional legacy JSON array with category and serial_numbers entries for backward compatibility
-  category_rules_json:
-    type: string
-    title: Category Rules JSON
-    default: ""
-    description: Optional JSON object overriding API paths and readiness rules by category
   api_request_timeout:
     type: string
     title: API Request Timeout
@@ -81,17 +71,15 @@ grains:
             validate_certs: '{{ .inputs.validate_certs }}'
       inputs:
         - devices_yaml: '{{ .inputs.devices_yaml }}'
-        - devices_json: '{{ .inputs.devices_json }}'
-        - category_rules_json: '{{ .inputs.category_rules_json }}'
         - api_request_timeout: '{{ .inputs.api_request_timeout }}'
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
         - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
       outputs:
-        - verification_summary_json
-        - verification_success
+        - readiness_summary_json
+        - readiness_success
         - missing_devices_json
-        - invalid_lifecycle_devices_json
+        - not_ready_devices_json
     on-destroy:
       - source:
           store: intersightztp
@@ -103,19 +91,17 @@ grains:
                 ansible_connection: local
         inputs:
           - devices_yaml: '{{ .inputs.devices_yaml }}'
-          - devices_json: '{{ .inputs.devices_json }}'
-          - category_rules_json: '{{ .inputs.category_rules_json }}'
           - api_request_timeout: '{{ .inputs.api_request_timeout }}'
           - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
           - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
           - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
 
 outputs:
-  verification_summary_json:
-    value: '{{ .grains.devices_readiness.outputs.verification_summary_json }}'
-  verification_success:
-    value: '{{ .grains.devices_readiness.outputs.verification_success }}'
+  readiness_summary_json:
+    value: '{{ .grains.devices_readiness.outputs.readiness_summary_json }}'
+  readiness_success:
+    value: '{{ .grains.devices_readiness.outputs.readiness_success }}'
   missing_devices_json:
     value: '{{ .grains.devices_readiness.outputs.missing_devices_json }}'
-  invalid_lifecycle_devices_json:
-    value: '{{ .grains.devices_readiness.outputs.invalid_lifecycle_devices_json }}'
+  not_ready_devices_json:
+    value: '{{ .grains.devices_readiness.outputs.not_ready_devices_json }}'
