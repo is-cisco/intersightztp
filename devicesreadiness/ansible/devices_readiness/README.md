@@ -26,6 +26,7 @@ For Torque, the blueprint should point directly to `devicesreadiness/ansible/dev
 
 ## Required Variables
 
+- `agent`: Torque agent name used by the blueprint to select the runner
 - `api_key_id`: Cisco Intersight API key ID
 - `api_private_key`: Cisco Intersight private key content or a readable path
 - `devices_yaml`: structured device payload is required
@@ -147,6 +148,8 @@ grains:
       source:
         store: intersightztp
         path: devicesreadiness/ansible/devices_readiness/playbook.yaml
+      agent:
+        name: '{{ .inputs.agent }}'
       inventory-file:
         localhost:
           hosts:
