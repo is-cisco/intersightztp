@@ -49,7 +49,7 @@ For Torque, the blueprint should point directly to `devicesreadiness/ansible/dev
 
 ## Preferred Input Contract
 
-Input is JSON passed as a string through `devices_json`.
+Input is JSON through `devices_json`. Depending on the runner, it may arrive as a JSON string or as an already-parsed mapping.
 
 Preferred JSON example:
 

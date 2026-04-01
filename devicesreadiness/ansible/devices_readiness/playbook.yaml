@@ -6,13 +6,6 @@
   any_errors_fatal: true
 
   vars:
-    devices_json_normalized: >-
-      {{
-        devices_json
-        if (devices_json | default('') | trim | length) > 0
-        else ''
-      }}
-
     default_category_rules_json: |
       {
         "Blade": {
@@ -66,9 +59,14 @@
     - name: Validate device payload input presence
       ansible.builtin.assert:
         that:
-          - devices_json | default('') | trim | length > 0
+          - devices_json is defined
+          - (
+              (devices_json is string and (devices_json | trim | length > 0))
+              or
+              (devices_json is mapping)
+            )
         fail_msg: >-
-          Provide devices_json.
+          Provide devices_json as either a JSON string or a parsed mapping.
       changed_when: false
       tags: [always, validate, precheck]
 
@@ -84,7 +82,7 @@
 
     - name: Parse requested input payloads
       ansible.builtin.set_fact:
-        devices_payload: "{{ devices_json_normalized | from_json }}"
+        devices_payload: "{{ (devices_json | from_json) if (devices_json is string) else devices_json }}"
         category_rules: "{{ default_category_rules_json | from_json }}"
       changed_when: false
       tags: [always, validate, precheck]
@@ -96,7 +94,7 @@
           - devices_payload.devices is defined
           - devices_payload.devices is iterable
         fail_msg: >-
-          devices_json must parse to a mapping with a top-level devices list.
+          devices_json must resolve to a mapping with a top-level devices list.
       changed_when: false
       tags: [always, validate, precheck]
 
