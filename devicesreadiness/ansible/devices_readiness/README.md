@@ -15,14 +15,14 @@ The grain supports two runtime modes:
 
 ## Files
 
-- `ansible/devices_readiness/playbook.yaml`
-- `ansible/devices_readiness/teardown.yaml`
-- `ansible/devices_readiness/requirements.yaml`
-- `ansible/devices_readiness/tasks/evaluate_devices.yaml`
-- `ansible/devices_readiness/tasks/check_readiness_pass.yaml`
-- `ansible/devices_readiness/tasks/validate_fi_pair.yaml`
+- `devicesreadiness/ansible/devices_readiness/playbook.yaml`
+- `devicesreadiness/ansible/devices_readiness/teardown.yaml`
+- `devicesreadiness/ansible/devices_readiness/requirements.yaml`
+- `devicesreadiness/ansible/devices_readiness/tasks/evaluate_devices.yaml`
+- `devicesreadiness/ansible/devices_readiness/tasks/check_readiness_pass.yaml`
+- `devicesreadiness/ansible/devices_readiness/tasks/validate_fi_pair.yaml`
 
-For Torque, the blueprint points to the bundle directory `ansible/devices_readiness`. The `kind: ansible` grain uses `playbook.yaml` in that directory as the default run entrypoint, and `teardown.yaml` is referenced explicitly for `on-destroy`.
+For Torque, the blueprint should point directly to `devicesreadiness/ansible/devices_readiness/playbook.yaml`. Use `devicesreadiness/ansible/devices_readiness/teardown.yaml` explicitly for `on-destroy` so the runner always receives a concrete playbook file path.
 
 ## Required Variables
 
@@ -146,7 +146,7 @@ grains:
     spec:
       source:
         store: local
-        path: ansible/devices_readiness
+        path: devicesreadiness/ansible/devices_readiness/playbook.yaml
       inventory-file:
         localhost:
           hosts:
@@ -169,7 +169,7 @@ grains:
         - missing_devices_json
         - not_ready_devices_json
       on-destroy:
-        - path: teardown.yaml
+        - path: devicesreadiness/ansible/devices_readiness/teardown.yaml
           inventory-file:
             localhost:
               hosts:
