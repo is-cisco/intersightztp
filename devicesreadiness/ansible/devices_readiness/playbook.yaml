@@ -36,6 +36,40 @@
       }
 
   pre_tasks:
+    - name: Install shared Python requirements
+      ansible.builtin.pip:
+        requirements: "{{ playbook_dir }}/../requirements.txt"
+      tags: [always, precheck]
+
+    - name: Normalize Intersight private key input
+      ansible.builtin.set_fact:
+        api_private_key_normalized: "{{ normalized_api_private_key }}"
+      vars:
+        raw_api_private_key: "{{ api_private_key | string | trim }}"
+        newline_normalized_api_private_key: >-
+          {{
+            raw_api_private_key
+            | regex_replace('\\r\\n', '\n')
+            | regex_replace('\\n', '\n')
+          }}
+        decoded_api_private_key: "{{ raw_api_private_key | b64decode }}"
+        decoded_newline_normalized_api_private_key: >-
+          {{
+            decoded_api_private_key
+            | regex_replace('\\r\\n', '\n')
+            | regex_replace('\\n', '\n')
+          }}
+        normalized_api_private_key: >-
+          {%- if newline_normalized_api_private_key is match('^-----BEGIN .*PRIVATE KEY-----') -%}
+          {{ newline_normalized_api_private_key }}
+          {%- elif (raw_api_private_key is match('^[A-Za-z0-9+/=\\r\\n]+$')) and (decoded_newline_normalized_api_private_key is match('^-----BEGIN .*PRIVATE KEY-----')) -%}
+          {{ decoded_newline_normalized_api_private_key }}
+          {%- else -%}
+          {{ api_private_key }}
+          {%- endif -%}
+      changed_when: false
+      tags: [always, validate, precheck]
+
     - name: Normalize wait and polling inputs
       ansible.builtin.set_fact:
         wait_for_readiness_normalized: "{{ (wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes'] }}"
@@ -51,6 +85,7 @@
           - api_key_id | string | trim | length > 0
           - api_private_key is defined
           - api_private_key | string | trim | length > 0
+          - api_private_key_normalized | string | trim | length > 0
         fail_msg: >-
           api_key_id and api_private_key are required.
       changed_when: false

@@ -135,6 +135,14 @@ When `wait_for_readiness` is `true`, the grain re-queries Intersight until:
 
 `teardown.yaml` is a no-op. This grain validates inventory state and does not create or modify remote resources that require cleanup.
 
+## Runtime Dependencies
+
+Python packages:
+
+```bash
+python3 -m pip install -r devicesreadiness/ansible/requirements.txt
+```
+
 ## Blueprint Grain Snippet
 
 ```yaml
