@@ -36,7 +36,7 @@
 
 - name: Append Fabric Interconnect pair validation failures
   ansible.builtin.set_fact:
-    invalid_lifecycle_devices: "{{ invalid_lifecycle_devices + [fi_pair_failure] }}"
+    not_ready_devices: "{{ not_ready_devices + [fi_pair_failure] }}"
   vars:
     fi_pair_failure:
       category: FabricInterconnect

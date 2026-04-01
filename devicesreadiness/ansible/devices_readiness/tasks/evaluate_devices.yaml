@@ -15,9 +15,9 @@
         and response_item.Serial not in category_present_serials
         else category_present_serials
       }}
-    invalid_lifecycle_devices: >-
+    not_ready_devices: >-
       {{
-        invalid_lifecycle_devices
+        not_ready_devices
         + [{
             'category': category_name,
             'serial': response_item.Serial,
@@ -64,7 +64,7 @@
           if category_name == 'Chassis'
           else ((discovery_field in response_item) and (response_item[discovery_field] in allowed_states))
         )
-        else invalid_lifecycle_devices
+        else not_ready_devices
       }}
   loop: "{{ response_results }}"
   loop_control:

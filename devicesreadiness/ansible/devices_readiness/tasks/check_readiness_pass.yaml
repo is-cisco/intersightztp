@@ -32,7 +32,7 @@
 - name: Initialize attempt result lists
   ansible.builtin.set_fact:
     missing_devices: []
-    invalid_lifecycle_devices: []
+    not_ready_devices: []
     present_devices: []
   changed_when: false
   when: not (readiness_completed | default(false))
@@ -67,20 +67,20 @@
     - not (readiness_completed | default(false))
   tags: [verify, fi_pair]
 
-- name: Build readiness summary for current attempt
+    - name: Build readiness summary for current attempt
   ansible.builtin.set_fact:
-    readiness_completed: "{{ (missing_devices | length == 0) and (invalid_lifecycle_devices | length == 0) }}"
+    readiness_completed: "{{ (missing_devices | length == 0) and (not_ready_devices | length == 0) }}"
     readiness_attempts_executed: "{{ readiness_attempt_number | int }}"
     readiness_last_attempt: "{{ readiness_attempt_number | int }}"
-    verification_summary:
+    readiness_summary:
       requested_count: "{{ requested_devices | map(attribute='serial_numbers') | map('length') | sum }}"
       present_count: "{{ present_devices | length }}"
       missing_count: "{{ missing_devices | length }}"
-      invalid_lifecycle_count: "{{ invalid_lifecycle_devices | length }}"
+      not_ready_count: "{{ not_ready_devices | length }}"
       present_devices: "{{ present_devices }}"
       missing_devices: "{{ missing_devices }}"
-      invalid_lifecycle_devices: "{{ invalid_lifecycle_devices }}"
-      success: "{{ (missing_devices | length == 0) and (invalid_lifecycle_devices | length == 0) }}"
+      not_ready_devices: "{{ not_ready_devices }}"
+      success: "{{ (missing_devices | length == 0) and (not_ready_devices | length == 0) }}"
       wait_for_readiness: "{{ wait_for_readiness_normalized }}"
       max_attempts: "{{ readiness_max_attempts_normalized }}"
       attempts_executed: "{{ readiness_attempt_number | int }}"

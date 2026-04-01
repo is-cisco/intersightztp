@@ -12,13 +12,6 @@
         if (devices_yaml | default('') | trim | length) > 0
         else default_devices_yaml
       }}
-    devices_json_normalized: "{{ devices_json | default('') }}"
-    category_rules_json_normalized: >-
-      {{
-        category_rules_json
-        if (category_rules_json | default('') | trim | length) > 0
-        else default_category_rules_json
-      }}
     wait_for_readiness_normalized: >-
       {{
         (wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes']
@@ -81,9 +74,9 @@
     - name: Validate device payload input presence
       ansible.builtin.assert:
         that:
-          - (devices_yaml | default('') | trim | length > 0) or (devices_json | default('') | trim | length > 0)
+          - devices_yaml | default('') | trim | length > 0
         fail_msg: >-
-          Provide either devices_yaml or devices_json.
+          Provide devices_yaml.
       changed_when: false
       tags: [always, validate, precheck]
 
@@ -99,13 +92,8 @@
 
     - name: Parse requested input payloads
       ansible.builtin.set_fact:
-        devices_payload: >-
-          {{
-            (devices_yaml_normalized | from_yaml)
-            if (devices_yaml | default('') | trim | length) > 0
-            else {'devices': (devices_json_normalized | from_json)}
-          }}
-        category_rules: "{{ category_rules_json_normalized | from_json }}"
+        devices_payload: "{{ devices_yaml_normalized | from_yaml }}"
+        category_rules: "{{ default_category_rules_json | from_json }}"
       changed_when: false
       tags: [always, validate, precheck]
 
@@ -116,7 +104,7 @@
           - devices_payload.devices is defined
           - devices_payload.devices is iterable
         fail_msg: >-
-          devices_yaml must parse to a mapping with a top-level devices list, or devices_json must parse to a compatible devices array.
+          devices_yaml must parse to a mapping with a top-level devices list.
       changed_when: false
       tags: [always, validate, precheck]
 
@@ -191,14 +179,14 @@
         readiness_completed: false
         readiness_attempts_executed: 0
         readiness_last_attempt: 0
-        verification_summary:
+        readiness_summary:
           requested_count: "{{ requested_devices | map(attribute='serial_numbers') | map('length') | sum }}"
           present_count: 0
           missing_count: "{{ requested_devices | map(attribute='serial_numbers') | map('length') | sum }}"
-          invalid_lifecycle_count: 0
+          not_ready_count: 0
           present_devices: []
           missing_devices: []
-          invalid_lifecycle_devices: []
+          not_ready_devices: []
           success: false
           wait_for_readiness: "{{ wait_for_readiness_normalized }}"
           max_attempts: "{{ readiness_max_attempts_normalized }}"
@@ -219,19 +207,19 @@
 
     - name: Expose final readiness result lists
       ansible.builtin.set_fact:
-        missing_devices: "{{ verification_summary.missing_devices | default([]) }}"
-        invalid_lifecycle_devices: "{{ verification_summary.invalid_lifecycle_devices | default([]) }}"
-        present_devices: "{{ verification_summary.present_devices | default([]) }}"
+        missing_devices: "{{ readiness_summary.missing_devices | default([]) }}"
+        not_ready_devices: "{{ readiness_summary.not_ready_devices | default([]) }}"
+        present_devices: "{{ readiness_summary.present_devices | default([]) }}"
       changed_when: false
       tags: [verify, outputs]
 
     - name: Export outputs to Torque
       torque.collections.export_torque_outputs:
         outputs:
-          verification_summary_json: "{{ verification_summary | to_json }}"
-          verification_success: "{{ verification_summary.success | ternary('true', 'false') }}"
+          readiness_summary_json: "{{ readiness_summary | to_json }}"
+          readiness_success: "{{ readiness_summary.success | ternary('true', 'false') }}"
           missing_devices_json: "{{ missing_devices | to_json }}"
-          invalid_lifecycle_devices_json: "{{ invalid_lifecycle_devices | to_json }}"
+          not_ready_devices_json: "{{ not_ready_devices | to_json }}"
       delegate_to: localhost
       run_once: true
       tags: always
@@ -241,11 +229,11 @@
     - name: Assert readiness verification success
       ansible.builtin.assert:
         that:
-          - verification_summary is defined
-          - verification_summary.success
+          - readiness_summary is defined
+          - readiness_summary.success
         fail_msg: >-
           Device readiness validation failed. Missing devices: {{ missing_devices | to_json }}.
-          Invalid or not-ready devices: {{ invalid_lifecycle_devices | to_json }}.
+          Not-ready devices: {{ not_ready_devices | to_json }}.
         success_msg: >-
           Device readiness validation passed for all requested serial numbers.
       changed_when: false

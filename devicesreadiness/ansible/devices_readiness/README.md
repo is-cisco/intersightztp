@@ -28,7 +28,7 @@ For Torque, the blueprint points to the bundle directory `ansible/devices_readin
 
 - `api_key_id`: Cisco Intersight API key ID
 - `api_private_key`: Cisco Intersight private key content or a readable path
-- `devices_yaml` or `devices_json`: one structured device payload is required
+- `devices_yaml`: structured device payload is required
 
 ## Optional Variables
 
@@ -36,7 +36,6 @@ For Torque, the blueprint points to the bundle directory `ansible/devices_readin
   Default: `https://intersight.com/api/v1`
 - `validate_certs`: boolean-like string
   Default: `true`
-- `category_rules_json`: JSON object overriding category endpoints and readiness rules
 - `api_request_timeout`: task timeout for API requests in seconds
   Default: `60`
 - `wait_for_readiness`: boolean-like string
@@ -72,26 +71,9 @@ The playbook normalizes the input into an internal device batch list so future C
 
 That normalization layer is the part we can revisit later if the source format changes to CSV or another ingestion format.
 
-## Legacy Input Contract
-
-Legacy JSON input is still supported through `devices_json`.
-
-```json
-[
-  {
-    "category": "Blade",
-    "serial_numbers": ["FCH1234A1BC", "FCH1234A1BD"]
-  },
-  {
-    "category": "Rack",
-    "serial_numbers": ["ABC1234D5EF"]
-  }
-]
-```
-
 ## Default Readiness Rules
 
-If `category_rules_json` is not supplied, the grain uses these defaults:
+The grain uses these internal defaults:
 
 - `Blade`
   Endpoint: `/compute/PhysicalSummaries`
@@ -107,44 +89,12 @@ If `category_rules_json` is not supplied, the grain uses these defaults:
   Readiness: `Operability == online`
   Pair validation: same `DeviceMoId`, one `SwitchId == A`, one `SwitchId == B`
 
-## Example `category_rules_json`
-
-```json
-{
-  "Blade": {
-    "resource_path": "/compute/PhysicalSummaries",
-    "serial_field": "Serial",
-    "discovery_field": "Lifecycle",
-    "allowed_discovery_states": ["Active"]
-  },
-  "Rack": {
-    "resource_path": "/compute/PhysicalSummaries",
-    "serial_field": "Serial",
-    "discovery_field": "ManagementMode",
-    "allowed_discovery_states": ["IMM", "IntersightStandalone"]
-  },
-  "Chassis": {
-    "resource_path": "/equipment/Chasses",
-    "serial_field": "Serial",
-    "discovery_field": "Serial",
-    "allowed_discovery_states": ["__present__"]
-  },
-  "FabricInterconnect": {
-    "resource_path": "/network/Elements",
-    "serial_field": "Serial",
-    "discovery_field": "Operability",
-    "allowed_discovery_states": ["online"],
-    "pair_validation": true
-  }
-}
-```
-
 ## Outputs
 
-- `verification_summary_json`: summary payload for the full request
-- `verification_success`: `true` or `false`
+- `readiness_summary_json`: summary payload for the full request
+- `readiness_success`: `true` or `false`
 - `missing_devices_json`: missing device entries
-- `invalid_lifecycle_devices_json`: devices that are present but not ready, plus invalid FI pair results
+- `not_ready_devices_json`: devices that are present but not ready, plus invalid FI pair results
 
 The summary also includes:
 
@@ -152,8 +102,6 @@ The summary also includes:
 - `max_attempts`
 - `attempts_executed`
 - `last_attempt`
-
-Today the playbook still uses `verification_*` output names for backward compatibility. We can rename those later if you want them to align more closely with `readiness_*`.
 
 ## Readiness Modes
 
@@ -211,17 +159,15 @@ grains:
             validate_certs: '{{ .inputs.validate_certs }}'
       inputs:
         - devices_yaml: '{{ .inputs.devices_yaml }}'
-        - devices_json: '{{ .inputs.devices_json }}'
-        - category_rules_json: '{{ .inputs.category_rules_json }}'
         - api_request_timeout: '{{ .inputs.api_request_timeout }}'
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
         - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
       outputs:
-        - verification_summary_json
-        - verification_success
+        - readiness_summary_json
+        - readiness_success
         - missing_devices_json
-        - invalid_lifecycle_devices_json
+        - not_ready_devices_json
       on-destroy:
         - path: teardown.yaml
           inventory-file:
