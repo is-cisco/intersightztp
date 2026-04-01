@@ -49,12 +49,6 @@ inputs:
     title: Readiness Max Attempts
     default: "20"
     description: Maximum readiness poll attempts when wait_for_readiness is true
-  debug_enabled:
-    type: string
-    title: Debug Enabled
-    default: "false"
-    description: Pass true to disable no_log masking for troubleshooting
-
 outputs:
   readiness_summary_json:
     value: '{{ .grains.devices_readiness.outputs.readiness_summary_json }}'
@@ -73,7 +67,6 @@ grains:
         store: intersightztp
         path: devicesreadiness/ansible/devices_readiness/playbook.yaml
         # Match the modular repo layout by keeping grains under the product folder and using a concrete playbook path.
-      command-arguments: -vvv
       agent:
         name: '{{ .inputs.agent }}'
       inventory-file:
@@ -91,7 +84,6 @@ grains:
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
         - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
-        - debug_enabled: '{{ .inputs.debug_enabled }}'
       outputs:
         - readiness_summary_json
         - readiness_success
