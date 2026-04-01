@@ -9,7 +9,7 @@
 
 - name: Query Intersight for each category batch
   cisco.intersight.intersight_rest_api:
-    api_private_key: "{{ api_private_key_normalized | default(api_private_key) }}"
+    api_private_key: "{{ api_private_key }}"
     api_key_id: "{{ api_key_id }}"
     api_uri: "{{ api_uri | default(omit) }}"
     validate_certs: "{{ (validate_certs | default('true') | string | lower) in ['true', '1', 'yes'] }}"
@@ -24,7 +24,7 @@
     loop_var: query_batch
     label: "{{ query_batch.category }}"
   changed_when: false
-  no_log: false
+  no_log: "{{ not (debug_enabled | default('false') | bool) }}"
   timeout: "{{ api_request_timeout | default(60) | int }}"
   when: not (readiness_completed | default(false))
   tags: [configure, verify]
