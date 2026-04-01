@@ -77,8 +77,8 @@
     - name: Validate wait configuration inputs
       ansible.builtin.assert:
         that:
-          - readiness_max_attempts_normalized > 0
-          - readiness_poll_interval_normalized >= 0
+          - (readiness_max_attempts_normalized | int) > 0
+          - (readiness_poll_interval_normalized | int) >= 0
         fail_msg: >-
           readiness_max_attempts must be greater than 0 and readiness_poll_interval must be 0 or greater.
       changed_when: false
@@ -191,7 +191,7 @@
 
     - name: Run readiness checks until success or attempt limit
       ansible.builtin.include_tasks: tasks/check_readiness_pass.yaml
-      loop: "{{ range(1, readiness_max_attempts_normalized + 1) | list }}"
+      loop: "{{ range(1, (readiness_max_attempts_normalized | int) + 1) | list }}"
       loop_control:
         label: "attempt {{ item }}"
       vars:
