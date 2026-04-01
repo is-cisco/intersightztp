@@ -3,6 +3,10 @@ spec_version: 2
 description: Validate requested devices are present in Cisco Intersight and either check readiness once or wait until they become ready.
 
 inputs:
+  agent:
+    type: string
+    title: Torque Agent
+    description: Torque agent that runs the workflow
   api_key_id:
     type: string
     title: Intersight API Key ID
@@ -64,6 +68,8 @@ grains:
         store: intersightztp
         path: devicesreadiness/ansible/devices_readiness/playbook.yaml
         # Match the modular repo layout by keeping grains under the product folder and using a concrete playbook path.
+      agent:
+        name: '{{ .inputs.agent }}'
       inventory-file:
         localhost:
           hosts:
