@@ -61,6 +61,27 @@
       changed_when: false
       tags: [always, validate, precheck]
 
+    - name: Summarize private key transport shape for debugging
+      ansible.builtin.set_fact:
+        api_private_key_debug_summary:
+          length: "{{ api_private_key | string | length }}"
+          line_count: "{{ api_private_key | string | splitlines() | length }}"
+          begins_with_pem_header: "{{ (api_private_key | string).startswith('-----BEGIN ') }}"
+          ends_with_pem_footer: "{{ ((api_private_key | string | trim).split('\n') | last).startswith('-----END ') }}"
+          contains_literal_backslash_n: "{{ '\\n' in (api_private_key | string) }}"
+          first_line: "{{ (api_private_key | string | splitlines() | first) if ((api_private_key | string | splitlines() | length) > 0) else '' }}"
+          last_line: "{{ ((api_private_key | string | trim).split('\n') | last) if ((api_private_key | string | trim | length) > 0) else '' }}"
+      changed_when: false
+      when: debug_enabled | default('false') | bool
+      no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+      tags: [always, validate, precheck]
+
+    - name: Print private key transport shape for debugging
+      ansible.builtin.debug:
+        var: api_private_key_debug_summary
+      when: debug_enabled | default('false') | bool
+      tags: [always, validate, precheck]
+
     - name: Validate device payload input presence
       ansible.builtin.assert:
         that:
