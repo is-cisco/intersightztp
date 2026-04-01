@@ -13,9 +13,9 @@ Primary entrypoint:
 
 ## Inputs
 
-- `endpoints`
-- `credentials`
-- `default_credentials`
+- `endpoints_json`
+- `desired_credentials_json`
+- `factory_credentials_json`
 - `location`
 - `organization`
 - `debug_enabled`

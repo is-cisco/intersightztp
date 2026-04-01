@@ -1,6 +1,6 @@
 # endpoint_onboarding
 
-Inventory-first Phase 1 workflow for claiming Cisco IMC endpoints into Intersight.
+Inventory-first endpoint onboarding workflow for claiming Cisco IMC endpoints into Intersight.
 This modular variant keeps the stable workflow shape but refactors the claim path
 toward a narrower custom-module design.
 
@@ -20,20 +20,20 @@ then runs the rest of the workflow per host.
 
 ## Most users only need these inputs
 
-- `agent`
-- `endpoints`
-- `credentials`
+- `agent` (`Torque Agent`)
+- `endpoints_json` (`Endpoints JSON`)
+- `desired_credentials_json` (`Desired Endpoint Credentials JSON`)
 - `location`
-- `api_key_id`
-- `api_private_key`
+- `api_key_id` (`Intersight API Key ID`)
+- `api_private_key` (`Intersight Private Key`)
 
 Advanced inputs:
 
-- `default_credentials`
-- `api_uri`
-- `organization`
-- `destroy_behavior`
-- `debug_enabled`
+- `factory_credentials_json` (`Factory Credentials JSON`)
+- `api_uri` (`Intersight API URI`)
+- `organization` (`Intersight Organization`)
+- `destroy_behavior` (`Destroy Behavior`)
+- `debug_enabled` (`Enable Debug Mode`)
 
 ## Recommended launch pattern
 
@@ -43,11 +43,11 @@ For most runs:
 - Intersight certificate validation is currently forced to `false` in the blueprint
 - leave `destroy_behavior` as `"noop"`
 - leave `debug_enabled` as `"false"`
-- only provide `default_credentials` when you expect first-boot or forced password-change behavior
+- only provide `factory_credentials_json` when you expect first-boot or forced password-change behavior
 
 ## Copy-paste examples
 
-### Single target `endpoints`
+### Single target `endpoints_json`
 
 ```json
 [
@@ -58,7 +58,7 @@ For most runs:
 ]
 ```
 
-### Range `endpoints`
+### Range `endpoints_json`
 
 ```json
 [
@@ -78,7 +78,7 @@ SJC-DC1 / Row-A
 
 Endpoints may override `location` individually when finer-grained placement is needed later.
 
-### Desired `credentials`
+### Desired `desired_credentials_json` (`Desired Endpoint Credentials JSON`)
 
 ```json
 [
@@ -90,7 +90,7 @@ Endpoints may override `location` individually when finer-grained placement is n
 ]
 ```
 
-### Optional `default_credentials`
+### Optional `factory_credentials_json` (`Factory Credentials JSON`)
 
 ```json
 [
@@ -104,7 +104,7 @@ Endpoints may override `location` individually when finer-grained placement is n
 
 ## Current behavior
 
-- builds a generated inventory from `endpoints`
+- builds a generated inventory from `endpoints_json`
 - stores desired and factory/default credentials as run-scoped generated inventory vars
 - applies an optional run-level `location` to all endpoints unless an endpoint overrides it
 - checks whether the desired password already works before attempting a reset

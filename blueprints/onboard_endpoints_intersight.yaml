@@ -2,52 +2,68 @@ spec_version: 2
 description: Zero-touch onboarding workflow for claiming and preparing Intersight-connected endpoints
 inputs:
   agent:
-    description: Torque agent that runs the workflow.
-    type: string
-  endpoints:
-    description: Required. JSON array of target definitions. Every item must declare type as single or range. Use endpoint for single entries and start_ip plus end_ip for range entries.
+    title: Torque Agent
+    description: Torque agent that runs this workflow.
+    type: agent
+  endpoints_json:
+    title: Endpoints JSON
+    description: JSON array of target definitions. Use `endpoint` for single targets and `start_ip` plus `end_ip` for ranges.
     type: string
     default: "[]"
-  credentials:
-    description: Required. JSON array of the desired endpoint credentials to use for login, connector preparation, and claim.
+  desired_credentials_json:
+    title: Desired Endpoint Credentials JSON
+    description: JSON array of endpoint credentials used for login, connector preparation, and claim.
     type: string
     default: "[]"
   location:
-    description: Optional default location for the endpoint group in this run. Individual endpoints may override it.
+    title: Location
+    description: Optional default location for all targets in this run. Individual targets may override it.
     type: string
     default: ""
   organization:
-    description: Optional intended Intersight organization for this onboarding run. In this phase it is carried as workflow context and reported in results.
+    title: Intersight Organization
+    description: Optional Intersight organization for this onboarding run.
     type: string
     default: ""
   deployment_name:
-    description: Optional zero-touch deployment name to tag on claimed devices for run traceability.
+    title: Deployment Name
+    description: Optional deployment name used to tag claimed devices for run traceability.
     type: string
     default: ""
-  default_credentials:
-    description: Advanced. Optional JSON array of factory or first-boot credentials used only when password reset or normalization is required.
+  factory_credentials_json:
+    title: Factory Credentials JSON
+    description: Advanced. JSON array of factory or first-boot credentials used only when password reset is required.
     type: string
     default: "[]"
   api_key_id:
-    description: Required. Intersight API key ID used for claim submission and verification.
+    title: Intersight API Key ID
+    description: Intersight API key ID used for claim submission and verification.
     type: string
+    sensitive: true
     default: ""
   api_private_key:
-    description: Required. PEM-formatted Intersight API private key content.
+    title: Intersight Private Key
+    description: PEM-formatted Intersight API private key content.
     type: string
+    sensitive: true
     default: ""
   api_uri:
-    description: Advanced. Intersight API base URI. Keep the default for normal claim runs. For unclaim parity with the UI, a regional endpoint such as https://us-east-1.intersight.com/api/v1 may be required.
+    title: Intersight API URI
+    description: Advanced. Intersight API base URI. Keep the default for standard SaaS runs.
     type: string
     default: "https://intersight.com/api/v1"
   destroy_behavior:
-    description: Advanced. Destroy behavior for the final grain. Use noop for the safest default or unclaim_input_targets to attempt endpoint unclaim during destroy.
+    title: Destroy Behavior
+    description: Advanced. Controls destroy-time behavior for claimed endpoints. Use `noop` to skip cleanup or `unclaim_input_targets` to attempt unclaim.
     type: string
     default: "noop"
+    allowed-values: ["noop", "unclaim_input_targets"]
   debug_enabled:
-    description: Advanced. Enables more verbose troubleshooting behavior and relaxes some no_log protections. Leave false for normal runs.
+    title: Enable Debug Mode
+    description: Advanced. Pass true to enable verbose troubleshooting behavior.
     type: string
     default: "false"
+    allowed-values: ["true", "false"]
 grains:
   validate_target_org:
     kind: ansible
@@ -89,11 +105,11 @@ grains:
           hosts:
             localhost:
       inputs:
-        - endpoints: '{{ .inputs.endpoints }}'
-        - credentials: '{{ .inputs.credentials }}'
+        - endpoints_json: '{{ .inputs.endpoints_json }}'
+        - desired_credentials_json: '{{ .inputs.desired_credentials_json }}'
         - location: '{{ .inputs.location }}'
         - organization: '{{ .grains.validate_target_org.outputs.org_name }}'
-        - default_credentials: '{{ .inputs.default_credentials }}'
+        - factory_credentials_json: '{{ .inputs.factory_credentials_json }}'
         - debug_enabled: '{{ .inputs.debug_enabled }}'
       outputs:
         - generated_inventory_yaml
@@ -191,11 +207,11 @@ grains:
             hosts:
               localhost:
         inputs:
-          - endpoints: '{{ .inputs.endpoints }}'
-          - credentials: '{{ .inputs.credentials }}'
+          - endpoints_json: '{{ .inputs.endpoints_json }}'
+          - desired_credentials_json: '{{ .inputs.desired_credentials_json }}'
           - location: '{{ .inputs.location }}'
           - organization: '{{ .inputs.organization }}'
-          - default_credentials: '{{ .inputs.default_credentials }}'
+          - factory_credentials_json: '{{ .inputs.factory_credentials_json }}'
           - api_key_id: '{{ .inputs.api_key_id }}'
           - api_private_key: '{{ .inputs.api_private_key }}'
           - api_uri: '{{ .inputs.api_uri }}'

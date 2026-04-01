@@ -14,7 +14,7 @@ Reference-only source:
 
 ### Before
 
-The older Phase 1 flow relied heavily on JSON list handoffs between grains.
+The older onboarding flow relied heavily on JSON list handoffs between grains.
 
 Characteristics:
 
@@ -66,7 +66,7 @@ This keeps the claim flow cleaner and makes first-boot behavior easier to reason
 
 Instead of handing a discovered target list to every grain, the first grain builds:
 
-- `endpoints`
+- `endpoints` host inventory in generated inventory
 - host vars for credentials and metadata
 
 ### Aggregation pattern
@@ -82,6 +82,7 @@ mode.
 ## What was intentionally preserved
 
 - JSON string inputs at the Torque boundary
+- launch input names: `endpoints_json`, `desired_credentials_json`, and `factory_credentials_json`
 - aggregate outputs for Torque chaining
 - helper-based protocol handling where IMC/IMM behavior is awkward in pure Ansible
 - conservative destroy semantics

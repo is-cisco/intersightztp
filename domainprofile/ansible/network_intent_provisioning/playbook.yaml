@@ -943,7 +943,7 @@
             )
             > 0
         fail_msg: >-
-          Phase 2 resolved uplink intent, but none of the intent target ports
+          Network intent provisioning resolved uplink intent, but none of the intent target ports
           matched the discovered onboarding uplinks in {{ attachment_port_policy_name }}.
           Update the solution intent target ports or onboard the expected uplinks
           before applying network intent.
@@ -1011,7 +1011,7 @@
           - item.api_response.Moid | length > 0
         fail_msg: >-
           Switch profile {{ deployment_name }}-{{ item.item }} was not found.
-          Phase 1 domain onboarding must complete before phase 2 policy attachment.
+          Domain onboarding must complete before network intent policy attachment.
       loop: "{{ switch_profile_lookup_results.results | default([]) }}"
       loop_control:
         label: "{{ deployment_name }}-{{ item.item }}"

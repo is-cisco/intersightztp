@@ -55,13 +55,15 @@
 
 - name: Validate Fabric Interconnect A/B pairing
   ansible.builtin.include_tasks: validate_fi_pair.yaml
-  vars:
-    fi_lookup_results: >-
-      {{
-        intersight_lookup.results
-        | selectattr('query_batch.category', 'equalto', 'FabricInterconnect')
-        | list
-      }}
+  loop: >-
+    {{
+      intersight_lookup.results
+      | selectattr('query_batch.category', 'equalto', 'FabricInterconnect')
+      | list
+    }}
+  loop_control:
+    loop_var: fi_lookup_result
+    label: "{{ fi_lookup_result.query_batch.serial_numbers | join(',') }}"
   when:
     - requested_devices | selectattr('category', 'equalto', 'FabricInterconnect') | list | length > 0
     - not (readiness_completed | default(false))

@@ -4,51 +4,49 @@ description: Validate requested devices are present in Cisco Intersight and eith
 
 inputs:
   agent:
-    type: string
+    type: agent
     title: Torque Agent
-    description: Torque agent that runs the workflow
+    description: Torque agent that runs this workflow.
   api_key_id:
     type: string
+    sensitive: true
     title: Intersight API Key ID
-    description: Cisco Intersight API key ID
+    description: Intersight API key ID used for authentication.
   api_private_key:
     type: string
+    sensitive: true
     title: Intersight Private Key
-    description: Cisco Intersight private key content or path accepted by the runner
+    description: Intersight private key content or a readable file path accepted by the runner.
   api_uri:
     type: string
     title: Intersight API URI
     default: https://intersight.com/api/v1
-    description: Optional Cisco Intersight API base URI
-  validate_certs:
-    type: string
-    title: Validate Certificates
-    default: "true"
-    description: Pass true or false as a string
+    description: Optional Intersight API base URI.
   devices_json:
     type: string
     title: Devices JSON
-    description: Required JSON payload describing devices and Fabric Interconnect pair entities
+    description: JSON payload describing the devices to validate, including Fabric Interconnect pairs when applicable.
   api_request_timeout:
     type: string
     title: API Request Timeout
     default: "60"
-    description: Timeout in seconds for each Intersight API request
+    description: Timeout in seconds for each Intersight API request.
   wait_for_readiness:
     type: string
     title: Wait For Readiness
     default: "false"
-    description: Pass true to keep polling until devices are ready or the attempt limit is reached
+    description: Pass true to keep polling until all requested devices are ready or the attempt limit is reached.
+    allowed-values: ["true", "false"]
   readiness_poll_interval:
     type: string
     title: Readiness Poll Interval
     default: "30"
-    description: Seconds between readiness polls when wait_for_readiness is true
+    description: Seconds between readiness polls when waiting is enabled.
   readiness_max_attempts:
     type: string
     title: Readiness Max Attempts
     default: "20"
-    description: Maximum readiness poll attempts when wait_for_readiness is true
+    description: Maximum number of readiness poll attempts when waiting is enabled.
 outputs:
   readiness_summary_json:
     value: '{{ .grains.devices_readiness.outputs.readiness_summary_json }}'
@@ -78,7 +76,7 @@ grains:
         - api_key_id: '{{ .inputs.api_key_id }}'
         - api_private_key: '{{ .inputs.api_private_key }}'
         - api_uri: '{{ .inputs.api_uri }}'
-        - validate_certs: '{{ .inputs.validate_certs }}'
+        - validate_certs: 'false'
         - devices_json: '{{ .inputs.devices_json }}'
         - api_request_timeout: '{{ .inputs.api_request_timeout }}'
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'

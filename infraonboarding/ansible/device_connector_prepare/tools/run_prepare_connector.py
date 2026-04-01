@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-host connector preparation helper for inventory-first Phase 1."""
+"""Per-host connector preparation helper for the inventory-first endpoint onboarding workflow."""
 
 from __future__ import annotations
 

@@ -35,14 +35,14 @@
           else []
         )
       }}
-    internal_intersight_validate_certs: "{{ validate_certs | default(false) | bool }}"
-    internal_intersight_api_uri: "{{ api_uri | default('https://intersight.com/api/v1') }}"
+    claim_intersight_validate_certs: "{{ validate_certs | default(false) | bool }}"
+    claim_api_uri: "{{ api_uri | default('https://intersight.com/api/v1') }}"
     internal_deployment_name: "{{ deployment_name | default('') }}"
     internal_organization: "{{ organization | default(inventory_organization, true) }}"
     internal_debug_enabled: "{{ debug_enabled | default('false') }}"
-    internal_intersight_api_key_id: "{{ api_key_id | default('') }}"
-    internal_intersight_api_private_key: "{{ api_private_key | default('') }}"
-    internal_endpoint_validate_certs: "{{ endpoint_validate_certs | default(validate_certs | default(false)) | bool }}"
+    claim_api_key_id: "{{ api_key_id | default('') }}"
+    claim_api_private_key: "{{ api_private_key | default('') }}"
+    claim_endpoint_validate_certs: "{{ endpoint_validate_certs | default(validate_certs | default(false)) | bool }}"
     internal_helper_timeout_seconds: "{{ helper_timeout_seconds | default(20) }}"
     debug_artifact_dir: "/tmp/endpoint_onboarding-debug/claim_to_intersight"
   pre_tasks:

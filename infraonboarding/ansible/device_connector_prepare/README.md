@@ -1,6 +1,6 @@
 # device_connector_prepare
 
-Production-ready connector preparation grain for inventory-first Phase 1.
+Production-ready connector preparation grain for the inventory-first endpoint onboarding workflow.
 
 ## Expected host groups
 
@@ -62,7 +62,7 @@ device_connector_prepare:
   depends-on: check_and_reset_default_password
   spec:
     source:
-      store: automation-repo
+      store: intersightztp
       path: infraonboarding/ansible/device_connector_prepare/playbook.yaml
     inventory-file:
       localhost:

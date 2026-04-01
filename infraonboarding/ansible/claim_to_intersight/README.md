@@ -1,6 +1,6 @@
 # claim_to_intersight
 
-Production-ready Intersight claim grain for inventory-first Phase 1.
+Production-ready Intersight claim grain for the inventory-first endpoint onboarding workflow.
 
 This grain now retrieves claim readiness just-in-time from prepared endpoints and submits
 the claim in the same runtime flow. The modular variant replaces the helper
@@ -87,7 +87,7 @@ claim_to_intersight:
   depends-on: device_connector_prepare
   spec:
     source:
-      store: automation-repo
+      store: intersightztp
       path: infraonboarding/ansible/claim_to_intersight/playbook.yaml
     inventory-file:
       localhost:

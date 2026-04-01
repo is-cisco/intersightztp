@@ -5,9 +5,9 @@
   gather_facts: false
   any_errors_fatal: true
   vars:
-    endpoints_input: "{{ endpoints | default('') }}"
-    credentials_input: "{{ credentials | default(credentials_json | default('')) }}"
-    default_credentials_input: "{{ default_credentials | default(default_credentials_json | default('[]')) }}"
+    endpoints_input: "{{ endpoints_json | default('') }}"
+    credentials_input: "{{ desired_credentials_json | default('') }}"
+    default_credentials_input: "{{ factory_credentials_json | default('[]') }}"
     location_input: "{{ location | default('') }}"
     organization_input: "{{ organization | default('') }}"
     debug_artifact_dir: "/tmp/endpoint_onboarding-debug/asset_discovery_inventory"
@@ -19,7 +19,7 @@
           - credentials_input | string | trim | length > 0
           - default_credentials_input | string | trim | length > 0
           - debug_enabled | default('false') | string | lower in ['true', 'false']
-        fail_msg: "endpoints and credentials are required"
+        fail_msg: "endpoints_json and desired_credentials_json are required"
       tags:
         - always
         - validate

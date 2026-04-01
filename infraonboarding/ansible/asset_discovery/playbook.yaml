@@ -5,9 +5,9 @@
   gather_facts: false
   any_errors_fatal: true
   vars:
-    internal_endpoints_json: "{{ endpoints | default('[]') }}"
-    internal_credentials_json: "{{ credentials | default('[]') }}"
-    internal_default_credentials_json: "{{ default_credentials | default('[]') }}"
+    internal_endpoints_json: "{{ endpoints_json | default('[]') }}"
+    internal_credentials_json: "{{ desired_credentials_json | default('[]') }}"
+    internal_default_credentials_json: "{{ factory_credentials_json | default('[]') }}"
     internal_location: "{{ location | default('') }}"
     internal_organization: "{{ organization | default('') }}"
     internal_discovery_management_port: "{{ discovery_management_port | default(443) }}"
@@ -20,7 +20,7 @@
         that:
           - internal_endpoints_json | string | trim | length > 0
           - internal_credentials_json | string | trim | length > 0
-        fail_msg: "endpoints and credentials are required"
+        fail_msg: "endpoints_json and desired_credentials_json are required"
       tags:
         - always
         - validate

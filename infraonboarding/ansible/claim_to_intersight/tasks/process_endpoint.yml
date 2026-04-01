@@ -11,13 +11,13 @@
     deployment_name: "{{ internal_deployment_name }}"
     organization: "{{ internal_organization }}"
     prepared_targets: "{{ prepared_endpoint_items }}"
-    role_api_key_id: "{{ internal_intersight_api_key_id }}"
-    role_api_private_key: "{{ internal_intersight_api_private_key }}"
-    role_api_uri: "{{ internal_intersight_api_uri }}"
-    role_validate_certs: "{{ internal_intersight_validate_certs }}"
+    role_api_key_id: "{{ claim_api_key_id }}"
+    role_api_private_key: "{{ claim_api_private_key }}"
+    role_api_uri: "{{ claim_api_uri }}"
+    role_validate_certs: "{{ claim_intersight_validate_certs }}"
     role_debug_enabled: "{{ internal_debug_enabled }}"
     role_debug_artifact_dir: "{{ debug_artifact_dir }}"
-    role_endpoint_validate_certs: "{{ internal_endpoint_validate_certs }}"
+    role_endpoint_validate_certs: "{{ claim_endpoint_validate_certs }}"
     role_operation_timeout_seconds: "{{ internal_helper_timeout_seconds }}"
 
 - name: Collect claim result for endpoint

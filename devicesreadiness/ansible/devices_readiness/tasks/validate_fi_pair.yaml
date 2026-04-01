@@ -2,8 +2,8 @@
 - name: Initialize Fabric Interconnect pair validation facts
   ansible.builtin.set_fact:
     fi_pair_errors: []
-    fi_pair_records: "{{ ((fi_lookup_results | first).api_response | default([])) if (fi_lookup_results | length) > 0 else [] }}"
-    fi_requested_serials: "{{ ((fi_lookup_results | first).query_batch.serial_numbers | default([])) if (fi_lookup_results | length) > 0 else [] }}"
+    fi_pair_records: "{{ fi_lookup_result.api_response | default([]) }}"
+    fi_requested_serials: "{{ fi_lookup_result.query_batch.serial_numbers | default([]) }}"
   tags: [verify, fi_pair]
 
 - name: Flag invalid Fabric Interconnect pair size

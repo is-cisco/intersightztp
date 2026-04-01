@@ -4,13 +4,15 @@
 
 ### `agent`
 
-- type: `string`
+- type: `agent`
+- title: `Torque Agent`
 - required: yes
 - meaning: Torque agent used to run all grains
 
-### `endpoints`
+### `endpoints_json`
 
 - type: `string`
+- title: `Endpoints JSON`
 - required: yes
 - default: `"[]"`
 - meaning: JSON array of target definitions
@@ -31,9 +33,10 @@ Example:
 ]
 ```
 
-### `credentials`
+### `desired_credentials_json`
 
 - type: `string`
+- title: `Desired Endpoint Credentials JSON`
 - required: yes
 - default: `"[]"`
 - meaning: desired steady-state credentials for the endpoint group in this run
@@ -53,13 +56,15 @@ Example:
 ### `location`
 
 - type: `string`
+- title: `Location`
 - required: no
 - default: `""`
 - meaning: optional default location for the endpoint group in this run; individual endpoints may override it later if needed
 
-### `default_credentials`
+### `factory_credentials_json`
 
 - type: `string`
+- title: `Factory Credentials JSON`
 - required: no
 - default: `"[]"`
 - meaning: optional factory/default credentials for first-boot password normalization in this endpoint group
@@ -67,21 +72,27 @@ Example:
 ### `api_key_id`
 
 - type: `string`
+- title: `Intersight API Key ID`
+- sensitive: `true`
 - required: yes for claim stage
 
 ### `api_private_key`
 
 - type: `string`
+- title: `Intersight Private Key`
+- sensitive: `true`
 - required: yes for claim stage
 
 ### `api_uri`
 
 - type: `string`
+- title: `Intersight API URI`
 - default: `"https://intersight.com/api/v1"`
 
 ### `organization`
 
 - type: `string`
+- title: `Intersight Organization`
 - required: no
 - default: `""`
 - meaning: optional user-facing Intersight organization scope for the claim flow
@@ -97,6 +108,7 @@ Example:
 ### `destroy_behavior`
 
 - type: `string`
+- title: `Destroy Behavior`
 - default: `"noop"`
 - allowed values:
   - `noop`
@@ -105,7 +117,11 @@ Example:
 ### `debug_enabled`
 
 - type: `string`
+- title: `Enable Debug Mode`
 - default: `"false"`
+- allowed values:
+  - `true`
+  - `false`
 
 ## Grain outputs
 

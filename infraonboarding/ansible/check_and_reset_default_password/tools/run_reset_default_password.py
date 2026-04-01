@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-host default password check and reset helper for inventory-first Phase 1."""
+"""Per-host default password check and reset helper for the inventory-first endpoint onboarding workflow."""
 
 from __future__ import annotations
 

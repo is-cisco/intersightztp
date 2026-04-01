@@ -7,14 +7,14 @@ port overrides against the discovered model, composes the onboarding payload,
 and exports stable outputs for downstream grains or later network-intent
 provisioning.
 
-The downstream phase-2 companion lives in
+The downstream network intent provisioning companion lives in
 `ansible/network_intent_provisioning/`.
 
 The first iteration assumes Ethernet-only port configuration. Fibre Channel,
 FCoE, and breakout-specific behavior are intentionally out of scope.
 FI model defaults are hardware-only. VLANs, VLAN groups, and solution-specific
-uplink intent are now treated as deferred network intent for a later
-provisioning phase rather than being part of the onboarding deployment path.
+uplink intent are now treated as deferred network intent for a separate
+provisioning workflow rather than being part of the onboarding deployment path.
 Management-global settings such as NTP and DNS are handled in onboarding
 through a default domain-policy catalog and can be overridden through
 `global_settings`.
@@ -23,26 +23,22 @@ through a default domain-policy catalog and can be overridden through
 
 All user-facing complex contracts are string-safe for Torque.
 
-- `api_key_id`: Intersight API key ID.
-- `api_private_key`: Intersight API private key.
-- `api_uri`: Optional custom Intersight endpoint.
-- `validate_certs`: Optional TLS validation toggle.
-- `fi_devices_json`: JSON array of FI device objects.
-- `deployment_name`: Required deployment prefix used to name all created
-  Intersight policies and profiles.
-- `customer_overrides_json`: Optional JSON object for onboarding global
-  settings or port-default overrides.
-- `port_catalog_key`: Optional catalog key under
-  `catalog/domain_profile_ports/` used to load a named customer port layout.
+- `api_key_id`: Intersight API key ID. Blueprint title: `Intersight API Key ID`
+- `api_private_key`: PEM-formatted Intersight API private key content. Blueprint title: `Intersight Private Key`
+- `api_uri`: Optional custom Intersight endpoint. Blueprint title: `Intersight API URI`
+- `fi_devices_json`: JSON array of FI device objects. Blueprint title: `Fabric Interconnect Devices JSON`
+- `deployment_name`: Required deployment prefix used to name all created Intersight policies and profiles. Blueprint title: `Deployment Name`
+- `customer_overrides_json`: Optional JSON object for onboarding global settings or port-default overrides. Blueprint title: `Customer Overrides JSON`
+- `port_catalog_key`: Optional catalog key under `catalog/domain_profile_ports/` used to load a named customer port layout. Blueprint title: `Port Catalog Key`
 - `port_config_yaml`: Optional YAML string for onboarding port-level overrides,
   including `server_ports`, `uplinks`, and `uplink_port_channels`.
   If both `port_catalog_key` and `port_config_yaml` are omitted, the grain can
   fall back to a model-defined default uplink port-channel when the FI model
-  provides one.
+  provides one. Blueprint title: `Port Config YAML`
 - `organization`: Initial deployment context input for Intersight
   organization. This is not sourced from solution intent files. The
   organization must already exist in Intersight; this workflow validates it
-  but does not create it.
+  but does not create it. Blueprint title: `Intersight Organization`
 
 The onboarding blueprint is intended for zero-touch deployment, so it always
 creates the baseline onboarding stack: switch control policy, System QoS
@@ -51,7 +47,12 @@ NTP and DNS/network connectivity baseline policies are also created from the
 default policy catalog unless overridden through `global_settings`.
 
 The onboarding blueprint does not ask for solution intent selection. Deferred
-intent metadata can be supplied later by the phase-2 network intent workflow.
+intent metadata can be supplied later by the network intent provisioning workflow.
+
+## Internal Defaults
+
+- `validate_certs` is not exposed in the blueprint launch form.
+  The blueprint passes `false` to the grain.
 
 ## Example Inputs
 
@@ -142,7 +143,7 @@ that may have created optional SNMP or flow-control policies.
 ## Repository Defaults
 
 - Solution intents live under `catalog/solution_intents/`.
-- Default phase-1 policy data lives under `catalog/domain_profile_policies/`.
+- Default domain onboarding policy data lives under `catalog/domain_profile_policies/`.
 - Optional customer port catalogs live under `catalog/domain_profile_ports/`.
 - FI model defaults live under `defaults/fi_models/`.
 - FI model defaults currently describe Ethernet port ranges only.
@@ -150,9 +151,9 @@ that may have created optional SNMP or flow-control policies.
   system QoS, NTP, and DNS/network connectivity behavior.
 - VLANs and VLAN groups are intentionally kept out of FI model defaults.
 - Solution intent files remain available as catalog metadata, but their VLAN
-  and VLAN-group content is deferred to a separate phase-2 network provisioning
+  and VLAN-group content is deferred to a separate network intent provisioning
   workflow.
-- Phase 1 onboarding focuses on hardware discovery, server ports, uplink
+- Domain onboarding focuses on hardware discovery, server ports, uplink
   ports, and uplink port-channels.
 - Port merge precedence is:
   1. FI model defaults
@@ -172,7 +173,7 @@ that may have created optional SNMP or flow-control policies.
   policy values.
 - `global_settings.uplink_mode` currently defaults to `standard` for
   onboarding.
-- NTP and network connectivity policies are part of the default phase-1
+- NTP and network connectivity policies are part of the default domain onboarding
   baseline and can be overridden through `global_settings`.
 - When created, they are not yet attached to the FI switch profile bucket
   until the exact domain-side attachment model is confirmed.

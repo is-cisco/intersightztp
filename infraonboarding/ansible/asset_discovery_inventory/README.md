@@ -1,6 +1,6 @@
 # asset_discovery_inventory
 
-Production-ready inventory builder grain for the inventory-first Phase 1 workflow.
+Production-ready inventory builder grain for the inventory-first endpoint onboarding workflow.
 
 ## Expected host groups
 
@@ -8,17 +8,17 @@ Production-ready inventory builder grain for the inventory-first Phase 1 workflo
 
 ## Required vars
 
-- `endpoints`
-- `credentials`
+- `endpoints_json` (blueprint title: `Endpoints JSON`)
+- `desired_credentials_json` (blueprint title: `Desired Endpoint Credentials JSON`)
 
-`endpoints` must be a JSON array where every item includes:
+`endpoints_json` must be a JSON array where every item includes:
 - `type: "single"` with `endpoint`
 - or `type: "range"` with `start_ip` and `end_ip`
 
 ## Optional vars
 
-- `default_credentials`
-- `debug_enabled`
+- `factory_credentials_json` (blueprint title: `Factory Credentials JSON`)
+- `debug_enabled` (blueprint title: `Enable Debug Mode`)
 - `group`
 
 ## Outputs
@@ -55,10 +55,10 @@ asset_discovery_inventory:
         hosts:
           localhost:
     inputs:
-      - endpoints: '{{ .inputs.endpoints }}'
-      - credentials: '{{ .inputs.credentials }}'
+      - endpoints_json: '{{ .inputs.endpoints_json }}'
+      - desired_credentials_json: '{{ .inputs.desired_credentials_json }}'
       - location: '{{ .inputs.location }}'
-      - default_credentials: '{{ .inputs.default_credentials }}'
+      - factory_credentials_json: '{{ .inputs.factory_credentials_json }}'
       - debug_enabled: '{{ .inputs.debug_enabled }}'
     outputs:
       - generated_inventory_yaml

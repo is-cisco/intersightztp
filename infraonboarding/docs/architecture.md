@@ -43,12 +43,12 @@ contracts.
 
 Torque passes:
 
-- `endpoints`
-- `credentials`
-- `location`
-- `default_credentials`
-- `organization`
-- Intersight authentication inputs
+- `endpoints_json` (`Endpoints JSON`)
+- `desired_credentials_json` (`Desired Endpoint Credentials JSON`)
+- `location` (`Location`)
+- `factory_credentials_json` (`Factory Credentials JSON`)
+- `organization` (`Intersight Organization`)
+- Intersight authentication inputs (`Intersight API Key ID`, `Intersight Private Key`, and `Intersight API URI`)
 
 ### Inventory shaping
 

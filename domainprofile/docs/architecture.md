@@ -8,9 +8,9 @@ in a single workflow.
 The current scope is Ethernet-only. Fibre Channel, FCoE, and breakout handling
 are deferred so the initial domain-profile workflow stays easier to validate.
 
-## Phase Model
+## Workflow Model
 
-### Phase 1: Domain Onboarding
+### Domain Onboarding Workflow
 
 1. User provides FI serial inventory, credentials, organization, deployment
    name, and optional onboarding overrides.
@@ -21,7 +21,7 @@ are deferred so the initial domain-profile workflow stays easier to validate.
 4. Customer `port_config_yaml` is validated against the discovered model.
 5. The grain builds baseline onboarding policies and the fabric
    switch-profile/domain-profile object graph.
-6. Stable JSON outputs are exported for downstream grains or later phases.
+6. Stable JSON outputs are exported for downstream grains or later workflows.
 
 Baseline onboarding policies include:
 - switch control
@@ -30,14 +30,14 @@ Baseline onboarding policies include:
 - network connectivity
 - port policy
 
-### Phase 2: Network Intent Provisioning
+### Network Intent Provisioning Workflow
 
 1. A later workflow consumes deployment context from onboarding.
 2. Solution intent or catalog metadata provides VLANs, VLAN groups, and
    solution-specific network policy.
 3. VLAN-side policy objects are created independently from FI onboarding.
 4. Network intent is attached to the already-onboarded uplink constructs.
-5. Disjoint or non-disjoint network design is handled explicitly in that phase.
+5. Disjoint or non-disjoint network design is handled explicitly in that workflow.
 6. Multicast is associated through VLAN membership in the VLAN policy rather
    than by attaching a multicast policy directly to the switch profiles.
 7. Disjoint VLANs must disable `auto_allow_on_uplinks` in the VLAN policy
@@ -58,7 +58,7 @@ Baseline onboarding policies include:
 - Keep VLANs and VLAN groups in the later network-intent layer, not in FI
   model defaults.
 - Treat `solution_intent` and `catalog_solution_key` as deferred metadata in
-  phase 1 rather than active dependencies.
+  the domain onboarding workflow rather than active dependencies.
 - Treat FI model discovery as mandatory and sourced from Intersight rather than
   a launch-form input.
 - Use `deployment_name` plus readable object-type suffixes for created

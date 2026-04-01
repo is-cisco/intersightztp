@@ -46,7 +46,7 @@ validate_target_org:
   kind: ansible
   spec:
     source:
-      store: automation-repo
+      store: intersightztp
       path: infraonboarding/ansible/validate_target_org/playbook.yaml
     inventory-file:
       localhost:

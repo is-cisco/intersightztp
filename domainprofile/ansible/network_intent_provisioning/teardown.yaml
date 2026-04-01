@@ -207,7 +207,7 @@
         - item.api_response.Moid is defined
       tags: [destroy, detach]
 
-    - name: Detach phase-2 policies from switch profiles
+    - name: Detach network intent policies from switch profiles
       cisco.intersight.intersight_rest_api:
         <<: *api_info
         resource_path: /fabric/SwitchProfiles
@@ -296,7 +296,7 @@
           - item.api_response.ConfigContext.ConfigState | default('') == 'Associated'
         fail_msg: >-
           Switch profile {{ item.item.switch_profile_name }} did not return to
-          Associated after detaching phase-2 policies. Final ConfigState was
+          Associated after detaching network intent policies. Final ConfigState was
           {{ item.api_response.ConfigContext.ConfigState | default('unknown') }}.
       loop: "{{ switch_profile_cleanup_wait_results.results | default([]) }}"
       loop_control:

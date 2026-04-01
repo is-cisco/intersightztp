@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repo uses inventory-first Ansible grains and a Torque blueprint for Cisco IMC to Intersight Phase 1 workflows.
+This repo uses inventory-first Ansible grains and a Torque blueprint for Cisco IMC to Intersight endpoint onboarding workflows.
 
 These standards capture the conventions we want contributors to follow in this repo.
 

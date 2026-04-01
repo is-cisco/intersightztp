@@ -8,9 +8,9 @@
     teardown_destroy_behavior: "{{ destroy_behavior | default('noop') }}"
     teardown_unclaim_poll_retries: "{{ unclaim_poll_retries | default(24) | int }}"
     teardown_unclaim_poll_delay_seconds: "{{ unclaim_poll_delay_seconds | default(5) | int }}"
-    endpoints_input: "{{ endpoints | default('') }}"
-    credentials_input: "{{ credentials | default(credentials_json | default('')) }}"
-    default_credentials_input: "{{ default_credentials | default(default_credentials_json | default('[]')) }}"
+    endpoints_input: "{{ endpoints_json | default('') }}"
+    credentials_input: "{{ desired_credentials_json | default('') }}"
+    default_credentials_input: "{{ factory_credentials_json | default('[]') }}"
   pre_tasks:
     - name: Validate teardown inputs
       ansible.builtin.assert:
@@ -23,7 +23,7 @@
           - teardown_unclaim_poll_retries > 0
           - teardown_unclaim_poll_delay_seconds > 0
         fail_msg: >-
-          destroy_behavior must be noop or unclaim_input_targets, endpoints and credentials must be provided,
+          destroy_behavior must be noop or unclaim_input_targets, endpoints_json and desired_credentials_json must be provided,
           and unclaim poll settings must be positive integers
       tags:
         - always

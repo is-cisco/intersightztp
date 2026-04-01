@@ -3,31 +3,50 @@ description: Cisco Intersight domain onboarding foundation with later network in
 inputs:
   agent:
     type: agent
+    title: Torque Agent
+    description: Torque agent that runs this workflow.
   api_key_id:
     type: string
     sensitive: true
+    title: Intersight API Key ID
+    description: Intersight API key ID used for authentication.
   api_private_key:
     type: string
     sensitive: true
+    title: Intersight Private Key
+    description: PEM-formatted Intersight API private key content.
   api_uri:
     type: string
     default: "https://intersight.com/api/v1"
+    title: Intersight API URI
+    description: Optional Intersight API base URI.
   fi_devices_json:
     type: string
-    description: JSON array of fabric interconnect devices with serial numbers
+    title: Fabric Interconnect Devices JSON
+    description: JSON array of Fabric Interconnect devices, including serial numbers.
   deployment_name:
     type: string
+    title: Deployment Name
+    description: Deployment name used as the prefix for created Intersight objects.
   customer_overrides_json:
     type: string
     default: "{}"
+    title: Customer Overrides JSON
+    description: Optional JSON object of customer-specific overrides applied during payload composition.
   port_catalog_key:
     type: string
     default: ""
+    title: Port Catalog Key
+    description: Optional port catalog profile to use for default port behavior.
   port_config_yaml:
     type: string
     default: "{}"
+    title: Port Config YAML
+    description: Optional YAML payload for explicit port configuration overrides.
   organization:
     type: string
+    title: Intersight Organization
+    description: Intersight organization where the domain profile resources are created.
 
 outputs:
   validations_passed:
@@ -109,3 +128,15 @@ grains:
         source:
           store: intersightztp
           path: domainprofile/ansible/domain_profile_deployment/teardown.yaml
+        inventory-file:
+          localhost:
+            hosts:
+              localhost:
+            vars:
+              api_key_id: '{{ .inputs.api_key_id }}'
+              api_private_key: '{{ .inputs.api_private_key }}'
+              api_uri: '{{ .inputs.api_uri }}'
+              validate_certs: 'false'
+        inputs:
+          - deployment_name: '{{ .inputs.deployment_name }}'
+          - organization: '{{ .inputs.organization }}'

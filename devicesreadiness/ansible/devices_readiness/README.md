@@ -26,28 +26,32 @@ For Torque, the blueprint should point directly to `devicesreadiness/ansible/dev
 
 ## Required Variables
 
-- `agent`: Torque agent name used by the blueprint to select the runner
-- `api_key_id`: Cisco Intersight API key ID
-- `api_private_key`: Cisco Intersight private key content or a readable path
-- `devices_json`: structured device payload is required
+- `agent`: Torque agent input used by the blueprint to select the runner. Blueprint title: `Torque Agent`
+- `api_key_id`: Intersight API key ID used for authentication. Blueprint title: `Intersight API Key ID`
+  Sensitive blueprint input: `true`
+- `api_private_key`: Intersight private key content or a readable file path accepted by the runner. Blueprint title: `Intersight Private Key`
+  Sensitive blueprint input: `true`
+- `devices_json`: structured device payload is required. Blueprint title: `Devices JSON`
 
 ## Optional Variables
 
-- `api_uri`: Intersight API base URI
+- `api_uri`: Intersight API base URI. Blueprint title: `Intersight API URI`
   Default: `https://intersight.com/api/v1`
-- `validate_certs`: boolean-like string
-  Default: `true`
-- `api_request_timeout`: task timeout for API requests in seconds
+- `api_request_timeout`: task timeout for API requests in seconds. Blueprint title: `API Request Timeout`
   Default: `60`
-- `wait_for_readiness`: boolean-like string
+- `wait_for_readiness`: boolean-like string. Blueprint title: `Wait For Readiness`
   Default: `false`
-- `readiness_poll_interval`: seconds between readiness polls when waiting
+  Allowed values: `true`, `false`
+- `readiness_poll_interval`: seconds between readiness polls when waiting. Blueprint title: `Readiness Poll Interval`
   Default: `30`
-- `readiness_max_attempts`: maximum poll attempts when waiting
+- `readiness_max_attempts`: maximum poll attempts when waiting. Blueprint title: `Readiness Max Attempts`
   Default: `20`
-- `debug_enabled`: pass `"true"` to disable `no_log` masking while troubleshooting
-  Default: `false`
 - `group`: overrideable target host group
+
+## Internal Defaults
+
+- `validate_certs` is not exposed in the blueprint launch form.
+  The blueprint passes `false` to the grain.
 
 ## Preferred Input Contract
 
@@ -164,14 +168,13 @@ grains:
             api_key_id: '{{ .inputs.api_key_id }}'
             api_private_key: '{{ .inputs.api_private_key }}'
             api_uri: '{{ .inputs.api_uri }}'
-            validate_certs: '{{ .inputs.validate_certs }}'
+            validate_certs: 'false'
       inputs:
         - devices_json: '{{ .inputs.devices_json }}'
         - api_request_timeout: '{{ .inputs.api_request_timeout }}'
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
         - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
-        - debug_enabled: '{{ .inputs.debug_enabled }}'
       outputs:
         - readiness_summary_json
         - readiness_success

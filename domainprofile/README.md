@@ -2,7 +2,7 @@
 
 This repo contains a Torque-ready Ansible foundation for Cisco Intersight
 domain onboarding, with network intent provisioning intentionally separated
-into a later phase.
+into a later workflow.
 
 ## Structure
 
@@ -10,7 +10,7 @@ into a later phase.
   requirements, and teardown.
 - `ansible/bootstrap_collections/`: worker bootstrap grain that installs the
   required Ansible collections before other grains run.
-- `ansible/network_intent_provisioning/`: phase-2 network intent grain,
+- `ansible/network_intent_provisioning/`: network intent provisioning grain,
   requirements, and teardown.
 - `blueprints/`: spec version 2 Torque blueprint.
 - `catalog/solution_intents/`: deferred network intent definitions and catalog
@@ -22,7 +22,7 @@ into a later phase.
 
 The current implementation validates inputs, discovers FI model details,
 configures baseline domain onboarding objects, and exports a composed payload.
-Phase 1 is about physical and policy onboarding:
+Domain onboarding is about physical and policy onboarding:
 - server ports
 - uplink ports
 - uplink port-channels
@@ -38,7 +38,7 @@ example `vf1-Domain-Profile`, `vf1-Port-Policy`, `vf1-Switch-Control`, and
 VLANs, VLAN groups, and solution-specific network attachment are intentionally
 deferred to a later network provisioning workflow.
 
-Phase 2 now has its own grain for:
+Network intent provisioning has its own grain for:
 - solution intent resolution
 - VLAN validation
 - VLAN group validation

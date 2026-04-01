@@ -1,6 +1,6 @@
 # check_and_reset_default_password
 
-Production-ready IMC password normalization grain for inventory-first Phase 1.
+Production-ready IMC password normalization grain for the inventory-first endpoint onboarding workflow.
 
 ## Expected host groups
 
@@ -52,7 +52,7 @@ check_and_reset_default_password:
   depends-on: asset_discovery
   spec:
     source:
-      store: automation-repo
+      store: intersightztp
       path: infraonboarding/ansible/check_and_reset_default_password/playbook.yaml
     inventory-file:
       localhost:
@@ -69,7 +69,7 @@ check_and_reset_default_password:
       - password_reset_failed_count
   on-destroy:
     - source:
-        store: automation-repo
+        store: intersightztp
         path: infraonboarding/ansible/check_and_reset_default_password/teardown.yaml
       inventory-file:
         localhost:

@@ -26,7 +26,6 @@
     password_stage_ready_endpoints: "{{ password_stage_ready_endpoints_input if (password_stage_ready_endpoints_input is not string) else ((password_stage_ready_endpoints_input | from_yaml) if (password_stage_ready_endpoints_input | string | length > 0) else []) }}"
     inventory_desired_credentials: "{{ generated_inventory_payload.all.vars.desired_credentials | default([]) }}"
     internal_debug_enabled: "{{ debug_enabled | default('false') }}"
-    internal_endpoint_validate_certs: false
     internal_helper_timeout_seconds: 20
     debug_artifact_dir: "/tmp/endpoint_onboarding-debug/device_connector_prepare"
   pre_tasks:
