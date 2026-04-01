@@ -67,7 +67,7 @@
     - not (readiness_completed | default(false))
   tags: [verify, fi_pair]
 
-    - name: Build readiness summary for current attempt
+- name: Build readiness summary for current attempt
   ansible.builtin.set_fact:
     readiness_completed: "{{ (missing_devices | length == 0) and (not_ready_devices | length == 0) }}"
     readiness_attempts_executed: "{{ readiness_attempt_number | int }}"

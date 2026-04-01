@@ -67,23 +67,6 @@ Preferred JSON example:
 }
 ```
 
-```yaml
-devices:
-  - category: Rack
-    serial: WZP26430BCA
-
-  - category: Blade
-    serial: FCH270177BF
-
-  - category: Chassis
-    serial: FOX2917PR1U
-
-  - category: FabricInterconnectPair
-    serials:
-      - FDO272406DE
-      - FDO272406CK
-```
-
 The playbook normalizes the input into an internal device batch list so future CSV or alternate parsing only needs to change the normalization layer.
 
 That normalization layer is the part we can revisit later if the source format changes to CSV or another ingestion format.
@@ -124,17 +107,13 @@ The summary also includes:
 
 Use the default behavior for a one-time check:
 
-```yaml
-wait_for_readiness: "false"
-```
+`wait_for_readiness: "false"`
 
 Use polling when downstream steps must not continue until devices are discovered:
 
-```yaml
-wait_for_readiness: "true"
-readiness_poll_interval: "30"
-readiness_max_attempts: "20"
-```
+`wait_for_readiness: "true"`
+`readiness_poll_interval: "30"`
+`readiness_max_attempts: "20"`
 
 When `wait_for_readiness` is `true`, the grain re-queries Intersight until:
 
