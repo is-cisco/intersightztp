@@ -49,6 +49,11 @@ inputs:
     title: Readiness Max Attempts
     default: "20"
     description: Maximum readiness poll attempts when wait_for_readiness is true
+  debug_enabled:
+    type: string
+    title: Debug Enabled
+    default: "false"
+    description: Pass true to disable no_log masking for troubleshooting
 
 outputs:
   readiness_summary_json:
@@ -86,6 +91,7 @@ grains:
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
         - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
+        - debug_enabled: '{{ .inputs.debug_enabled }}'
       outputs:
         - readiness_summary_json
         - readiness_success

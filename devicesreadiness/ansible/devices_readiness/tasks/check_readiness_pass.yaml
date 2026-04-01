@@ -24,7 +24,7 @@
     loop_var: query_batch
     label: "{{ query_batch.category }}"
   changed_when: false
-  no_log: true
+  no_log: false
   timeout: "{{ api_request_timeout | default(60) | int }}"
   when: not (readiness_completed | default(false))
   tags: [configure, verify]

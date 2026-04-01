@@ -45,6 +45,8 @@ For Torque, the blueprint should point directly to `devicesreadiness/ansible/dev
   Default: `30`
 - `readiness_max_attempts`: maximum poll attempts when waiting
   Default: `20`
+- `debug_enabled`: pass `"true"` to disable `no_log` masking while troubleshooting
+  Default: `false`
 - `group`: overrideable target host group
 
 ## Preferred Input Contract
@@ -161,6 +163,7 @@ grains:
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'
         - readiness_max_attempts: '{{ .inputs.readiness_max_attempts }}'
+        - debug_enabled: '{{ .inputs.debug_enabled }}'
       outputs:
         - readiness_summary_json
         - readiness_success
