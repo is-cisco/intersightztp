@@ -81,12 +81,11 @@ grains:
           hosts:
             localhost:
               ansible_connection: local
-          vars:
-            api_key_id: '{{ .inputs.api_key_id }}'
-            api_private_key: '{{ .inputs.api_private_key }}'
-            api_uri: '{{ .inputs.api_uri }}'
-            validate_certs: '{{ .inputs.validate_certs }}'
       inputs:
+        - api_key_id: '{{ .inputs.api_key_id }}'
+        - api_private_key: '{{ .inputs.api_private_key }}'
+        - api_uri: '{{ .inputs.api_uri }}'
+        - validate_certs: '{{ .inputs.validate_certs }}'
         - devices_json: '{{ .inputs.devices_json }}'
         - api_request_timeout: '{{ .inputs.api_request_timeout }}'
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
