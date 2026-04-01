@@ -29,7 +29,7 @@ For Torque, the blueprint should point directly to `devicesreadiness/ansible/dev
 - `agent`: Torque agent name used by the blueprint to select the runner
 - `api_key_id`: Cisco Intersight API key ID
 - `api_private_key`: Cisco Intersight private key content or a readable path
-- `devices_yaml`: structured device payload is required
+- `devices_json`: structured device payload is required
 
 ## Optional Variables
 
@@ -49,9 +49,23 @@ For Torque, the blueprint should point directly to `devicesreadiness/ansible/dev
 
 ## Preferred Input Contract
 
-Preferred input is YAML passed as a string through `devices_yaml`.
+Input is JSON passed as a string through `devices_json`.
 
-The grain also accepts the same payload when launch tooling sends it as a single string with escaped newline sequences such as `\n`.
+Preferred JSON example:
+
+```json
+{
+  "devices": [
+    { "category": "Rack", "serial": "WZP26430BCA" },
+    { "category": "Blade", "serial": "FCH270177BF" },
+    { "category": "Chassis", "serial": "FOX2917PR1U" },
+    {
+      "category": "FabricInterconnectPair",
+      "serials": ["FDO272406DE", "FDO272406CK"]
+    }
+  ]
+}
+```
 
 ```yaml
 devices:
@@ -163,7 +177,7 @@ grains:
             api_uri: '{{ .inputs.api_uri }}'
             validate_certs: '{{ .inputs.validate_certs }}'
       inputs:
-        - devices_yaml: '{{ .inputs.devices_yaml }}'
+        - devices_json: '{{ .inputs.devices_json }}'
         - api_request_timeout: '{{ .inputs.api_request_timeout }}'
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'

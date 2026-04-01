@@ -25,10 +25,10 @@ inputs:
     title: Validate Certificates
     default: "true"
     description: Pass true or false as a string
-  devices_yaml:
+  devices_json:
     type: string
-    title: Devices YAML
-    description: Preferred YAML payload describing devices and Fabric Interconnect pair entities
+    title: Devices JSON
+    description: Required JSON payload describing devices and Fabric Interconnect pair entities
   api_request_timeout:
     type: string
     title: API Request Timeout
@@ -81,7 +81,7 @@ grains:
             api_uri: '{{ .inputs.api_uri }}'
             validate_certs: '{{ .inputs.validate_certs }}'
       inputs:
-        - devices_yaml: '{{ .inputs.devices_yaml }}'
+        - devices_json: '{{ .inputs.devices_json }}'
         - api_request_timeout: '{{ .inputs.api_request_timeout }}'
         - wait_for_readiness: '{{ .inputs.wait_for_readiness }}'
         - readiness_poll_interval: '{{ .inputs.readiness_poll_interval }}'

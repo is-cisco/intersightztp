@@ -6,20 +6,12 @@
   any_errors_fatal: true
 
   vars:
-    devices_yaml_normalized: >-
+    devices_json_normalized: >-
       {{
-        devices_yaml
-        if (devices_yaml | default('') | trim | length) > 0
-        else default_devices_yaml
+        devices_json
+        if (devices_json | default('') | trim | length) > 0
+        else ''
       }}
-    devices_yaml_parseable: >-
-      {{
-        devices_yaml_normalized
-        | regex_replace('\\r\\n', '\n')
-        | regex_replace('\\n', '\n')
-      }}
-    default_devices_yaml: |
-      devices: []
 
     default_category_rules_json: |
       {
@@ -74,9 +66,9 @@
     - name: Validate device payload input presence
       ansible.builtin.assert:
         that:
-          - devices_yaml | default('') | trim | length > 0
+          - devices_json | default('') | trim | length > 0
         fail_msg: >-
-          Provide devices_yaml.
+          Provide devices_json.
       changed_when: false
       tags: [always, validate, precheck]
 
@@ -92,7 +84,7 @@
 
     - name: Parse requested input payloads
       ansible.builtin.set_fact:
-        devices_payload: "{{ devices_yaml_parseable | from_yaml }}"
+        devices_payload: "{{ devices_json_normalized | from_json }}"
         category_rules: "{{ default_category_rules_json | from_json }}"
       changed_when: false
       tags: [always, validate, precheck]
@@ -104,7 +96,7 @@
           - devices_payload.devices is defined
           - devices_payload.devices is iterable
         fail_msg: >-
-          devices_yaml must parse to a mapping with a top-level devices list.
+          devices_json must parse to a mapping with a top-level devices list.
       changed_when: false
       tags: [always, validate, precheck]
 
