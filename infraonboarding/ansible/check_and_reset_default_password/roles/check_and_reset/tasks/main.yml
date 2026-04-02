@@ -5,7 +5,7 @@
       - "{{ ansible_playbook_python }}"
       - "{{ playbook_dir }}/tools/run_reset_default_password.py"
   environment:
-    ENDPOINT: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+    ENDPOINT: "{{ endpoint | default(inventory_hostname) }}"
     DESIRED_CREDENTIALS_JSON: "{{ desired_credentials | to_json }}"
     DEFAULT_CREDENTIALS_JSON: "{{ default_credentials | to_json }}"
     VALIDATE_CERTS: "{{ (validate_certs | default(false) | bool) | ternary('true', 'false') }}"

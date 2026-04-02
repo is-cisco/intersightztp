@@ -96,6 +96,19 @@ def normalize_bool(value: Any) -> bool:
     return bool(value)
 
 
+def normalize_claim_key(serial_number: Any) -> str:
+    """Normalize standalone and paired serial identifiers into a stable dedup key."""
+    raw_value = str(serial_number or "").strip()
+    if not raw_value:
+        return ""
+    serial_parts = [part.strip() for part in raw_value.split("&") if part.strip()]
+    if not serial_parts:
+        return ""
+    if len(serial_parts) == 1:
+        return serial_parts[0]
+    return "&".join(sorted(serial_parts))
+
+
 def usable_credentials(credentials: list[dict[str, Any]]) -> list[dict[str, Any]]:
     usable: list[dict[str, Any]] = []
     for credential in credentials:
@@ -402,12 +415,14 @@ def fetch_claim_readiness(
             "connection_state": connection_state,
             "account_ownership_state": ownership_state,
             "connector_enabled": connector_enabled,
+            "normalized_claim_key": normalize_claim_key(claim_serial_number),
         }
 
         if claimed_already and claim_serial_number:
             claim_ready_target = {
                 **prepared_target,
                 "claim_serial_number": claim_serial_number,
+                "normalized_claim_key": normalize_claim_key(claim_serial_number),
                 "claim_security_token": "",
                 "connection_state": connection_state,
                 "account_ownership_state": ownership_state,
@@ -436,6 +451,7 @@ def fetch_claim_readiness(
         claim_ready_target = {
             **prepared_target,
             "claim_serial_number": claim_serial_number,
+            "normalized_claim_key": normalize_claim_key(claim_serial_number),
             "claim_security_token": claim_security_token,
             "connection_state": connection_state,
             "account_ownership_state": ownership_state,

@@ -33,6 +33,10 @@ Production-ready connector preparation grain for the inventory-first endpoint on
 - intermittent `/Login` failures such as `401 Invalid Character` have been observed on
   some endpoints even when credentials are valid; in practice this has behaved like a
   Device Connector service health issue rather than a deterministic credential failure
+- execution is split into three plays:
+  - a localhost inventory-shaping pass that builds a dynamic connector-preparation group
+  - a per-host execution pass that runs the role using inventory vars
+  - a localhost aggregation pass that exports stable Torque outputs
 
 ## Outputs
 

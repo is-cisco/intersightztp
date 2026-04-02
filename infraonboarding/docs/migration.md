@@ -44,7 +44,7 @@ Characteristics:
 
 ### New direction
 
-- `asset_discovery_inventory`
+- `asset_discovery`
 - `check_and_reset_default_password`
 - `device_connector_prepare`
 - `claim_to_intersight`

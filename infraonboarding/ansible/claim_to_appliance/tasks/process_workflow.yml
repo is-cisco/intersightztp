@@ -1,0 +1,49 @@
+---
+- name: Query appliance workflow records for submitted endpoint
+  cisco.intersight.intersight_rest_api:
+    api_key_id: "{{ api_key_id }}"
+    api_private_key: "{{ api_private_key }}"
+    api_uri: "{{ claim_api_uri }}"
+    validate_certs: "{{ claim_validate_certs }}"
+    resource_path: /workflow/WorkflowInfos
+    query_params:
+      $filter: >-
+        Name eq 'Device registration request'
+        and WorkflowCtx/InitiatorCtx/InitiatorName eq '{{ submitted_claim_result.endpoint }}'
+      $top: 5
+    return_list: true
+  register: appliance_workflow_check
+  failed_when: false
+  no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+
+- name: Collect appliance workflow log result
+  ansible.builtin.set_fact:
+    workflow_result_items: "{{ workflow_result_items + [workflow_result] }}"
+  vars:
+    workflow_api_results: "{{ appliance_workflow_check.api_response | default([]) }}"
+    sorted_workflow_results: "{{ workflow_api_results | sort(attribute='CreateTime', reverse=true) }}"
+    latest_workflow: "{{ (sorted_workflow_results | first) if (sorted_workflow_results | length) > 0 else {} }}"
+    workflow_result:
+      endpoint: "{{ submitted_claim_result.endpoint }}"
+      canonical_endpoint: "{{ submitted_claim_result.canonical_endpoint | default(submitted_claim_result.endpoint) }}"
+      normalized_claim_key: "{{ submitted_claim_result.normalized_claim_key | default(submitted_claim_result.endpoint) }}"
+      workflow_found: "{{ (workflow_api_results | length) > 0 }}"
+      workflow_count: "{{ workflow_api_results | length }}"
+      workflow_statuses: "{{ sorted_workflow_results | map(attribute='Status') | list if (sorted_workflow_results | length) > 0 else [] }}"
+      workflow_names: "{{ sorted_workflow_results | map(attribute='Name') | list if (sorted_workflow_results | length) > 0 else [] }}"
+      latest_workflow_moid: "{{ latest_workflow.Moid | default('') }}"
+      latest_workflow_name: "{{ latest_workflow.Name | default('') }}"
+      latest_workflow_status: "{{ latest_workflow.Status | default('') }}"
+      latest_workflow_progress: "{{ latest_workflow.Progress | default(0) }}"
+      latest_workflow_create_time: "{{ latest_workflow.CreateTime | default('') }}"
+      latest_workflow_end_time: "{{ latest_workflow.EndTime | default('') }}"
+      latest_workflow_messages: "{{ latest_workflow.Message | default([]) }}"
+      latest_workflow_response: "{{ latest_workflow }}"
+      workflow_response: "{{ workflow_api_results }}"
+      messages:
+        - >-
+          {%- if (workflow_api_results | length) > 0 -%}
+          Found {{ workflow_api_results | length }} matching workflow record(s) for endpoint {{ submitted_claim_result.endpoint }}. Using the newest workflow {{ latest_workflow.Moid | default('') }} with status {{ latest_workflow.Status | default('unknown') }}.
+          {%- else -%}
+          No matching workflow records were found yet for endpoint {{ submitted_claim_result.endpoint }}.
+          {%- endif -%}

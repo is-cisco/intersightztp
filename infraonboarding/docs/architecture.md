@@ -2,7 +2,7 @@
 
 ## Overview
 
-`endpoint_onboarding` is an inventory-first endpoint onboarding workflow for claiming Cisco standalone endpoints
+`endpoint_onboarding` is an inventory-first endpoint onboarding workflow for claiming Cisco endpoints
 into Cisco Intersight.
 
 The design keeps the Torque launch contract simple while shifting execution toward more
@@ -15,12 +15,34 @@ idiomatic Ansible:
 - the modular claim path keeps batch looping in Ansible and moves only the missing
   organization-aware claim behavior into a narrow custom module
 
+## Blueprint entrypoints
+
+Preferred Torque entrypoints:
+
+- [blueprints/onboard_endpoints_intersight_saas.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_saas.yaml)
+- [blueprints/onboard_endpoints_intersight_appliance.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_appliance.yaml)
+
+The older combined blueprint remains in the repo as an experimental reference. The mechanism-split blueprints also remain available for later work:
+
+- [blueprints/onboard_endpoints_device_connector.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_device_connector.yaml)
+- [blueprints/onboard_endpoints_credential_targets.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_credential_targets.yaml)
+
 ## Grain sequence
 
-1. `asset_discovery_inventory`
+SaaS path:
+
+1. `asset_discovery`
 2. `check_and_reset_default_password`
 3. `device_connector_prepare`
 4. `claim_to_intersight`
+
+Appliance path:
+
+1. `asset_discovery`
+2. `check_and_reset_default_password`
+3. `device_connector_prepare`
+4. `platform_type_resolve`
+5. `claim_to_appliance`
 
 ## Why inventory-first
 
@@ -50,9 +72,15 @@ Torque passes:
 - `organization` (`Intersight Organization`)
 - Intersight authentication inputs (`Intersight API Key ID`, `Intersight Private Key`, and `Intersight API URI`)
 
+Current entrypoint heuristic:
+
+- use the SaaS blueprint for `.intersight.com` claim flows
+- use the appliance blueprint for appliance API claim flows
+- keep the mechanism-split blueprints for later work
+
 ### Inventory shaping
 
-`asset_discovery_inventory` expands:
+`asset_discovery` expands:
 
 - `single` endpoints using `endpoint`
 - `range` endpoints using `start_ip` and `end_ip`
@@ -86,10 +114,19 @@ Each execution grain has:
 The aggregation play exports stable JSON/string outputs for the next grain and for the
 Torque UI.
 
-`claim_to_intersight` also performs the endpoint-side claim-readiness lookup immediately
-before claim submission so the main onboarding path does not need a separate claim-info grain.
-In the modular variant, the actual claim submission is handled by a local custom module that
-reuses Cisco's official Intersight module utilities for HTTP signing and REST calls.
+`claim_to_intersight` performs the endpoint-side claim-readiness lookup immediately
+before claim submission so the SaaS path does not need a separate claim-info grain.
+
+`claim_to_appliance` keeps the appliance path inside the same onboarding phase:
+
+- `platform_type_resolve` prepares appliance claim candidates and deduplicates logical targets
+- `claim_to_appliance` submits direct appliance claim requests
+- `claim_to_appliance` omits `RequestId` so the appliance generates a unique request identifier for each submission
+- the grain then does a second workflow lookup pass against `/workflow/WorkflowInfos`
+- workflow state is exposed as supplemental result detail without changing the top-level SaaS-style claim status semantics
+
+In the modular variant, the actual claim submission is handled by narrow local custom code only
+for behaviors that are not covered cleanly by the official collection.
 
 ## Security model
 
@@ -103,6 +140,7 @@ reuses Cisco's official Intersight module utilities for HTTP signing and REST ca
 - the modular claim path keeps the user-facing scope as `organization`; if organization-aware
   claim enforcement is used, the implementation may reuse or create a same-name Resource Group
   internally and create a reservation without exposing Resource Group as a launch input
+- appliance claim candidates may also carry reservation information so appliance claim scoping stays symmetric with the SaaS model
 
 ## Destroy model
 
@@ -122,6 +160,8 @@ Current options:
   intermittent `POST /Login` instability even with valid credentials; treat that as an
   endpoint-side service health concern before treating it as an automation-side credential bug
 - forward claim path is validated for both single-host and small-batch runs
+- appliance credential claim is the current recommended CVA or PVA path; appliance Device Connector token claim remains later work
+- appliance claim currently reports submission plus newest workflow state; it does not wait for terminal workflow completion inside the onboarding grain
 - destroy is now validated for the tested IMC path, though broader endpoint and org-scope coverage is still worth extending.
 - the modular variant intentionally favors official `cisco.intersight` collection usage where
   it works and adds custom code only for the claim gap

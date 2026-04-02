@@ -8,6 +8,15 @@ script claim path with a narrow local Ansible module that reuses the official
 Cisco Intersight module utilities for signing and REST calls while adding the
 missing organization-aware reservation-backed claim behavior.
 
+Execution is split into three plays:
+
+- a localhost inventory-shaping pass that builds a dynamic SaaS claim target group
+- a per-host claim execution pass
+- a localhost aggregation pass that exports stable Torque outputs
+
+The per-host claim play currently runs with `serial: 1` so the grain can preserve
+logical-target dedup behavior across endpoints before claim submission.
+
 Primary entrypoint:
 
 - `infraonboarding/ansible/claim_to_intersight/playbook.yaml`
@@ -18,7 +27,8 @@ Compatibility entrypoint:
 
 ## Expected host groups
 
-- `localhost` for aggregation and execution
+- `localhost` for inventory shaping and aggregation
+- dynamic per-endpoint execution group created at runtime for claim processing
 
 ## Required vars
 
@@ -94,7 +104,7 @@ claim_to_intersight:
         hosts:
           localhost:
     inputs:
-      - generated_inventory_json: '{{ .grains.asset_discovery_inventory.outputs.generated_inventory_json }}'
+      - generated_inventory_json: '{{ .grains.asset_discovery.outputs.generated_inventory_json }}'
       - prepared_endpoints_json: '{{ .grains.device_connector_prepare.outputs.prepared_endpoints_json }}'
       - api_key_id: '{{ .inputs.api_key_id }}'
       - api_private_key: '{{ .inputs.api_private_key }}'

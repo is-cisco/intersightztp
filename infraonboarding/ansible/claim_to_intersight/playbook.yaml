@@ -1,6 +1,6 @@
 ---
-- name: Claim to Intersight
-  hosts: "{{ group | default('localhost') }}"
+- name: Build dynamic inventory for SaaS claim
+  hosts: localhost
   connection: local
   gather_facts: false
   any_errors_fatal: true
@@ -90,12 +90,20 @@
         conflict_result_items: []
         skipped_result_items: []
         changed_result_items: []
+        seen_claim_target_map: {}
       tags:
         - always
         - outputs
 
-    - name: Process claim endpoints
-      ansible.builtin.include_tasks: tasks/process_endpoint.yml
+    - name: Add generated endpoints to dynamic SaaS claim group
+      ansible.builtin.add_host:
+        name: "{{ endpoint_item.key }}"
+        groups: saas_claim_targets
+        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.value.ansible_host | default(endpoint_item.key)) }}"
+        ansible_host: "{{ endpoint_item.value.ansible_host | default(endpoint_item.value.endpoint | default(endpoint_item.key)) }}"
+        source_entry_type: "{{ endpoint_item.value.source_entry_type | default('single') }}"
+        location: "{{ endpoint_item.value.location | default('') }}"
+        desired_credentials: "{{ endpoint_item.value.desired_credentials | default([]) }}"
       loop: "{{ endpoint_host_items }}"
       loop_control:
         loop_var: endpoint_item
@@ -105,7 +113,41 @@
         - claim
         - verify
         - aggregate
-  post_tasks:
+
+- name: Claim to Intersight per endpoint
+  hosts: saas_claim_targets
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  vars:
+    inventory_desired_credentials: "{{ hostvars['localhost'].inventory_desired_credentials | default([]) }}"
+    prepared_endpoint_items: "{{ hostvars['localhost'].prepared_endpoint_items | default([]) }}"
+    internal_deployment_name: "{{ hostvars['localhost'].internal_deployment_name | default('') }}"
+    internal_organization: "{{ hostvars['localhost'].internal_organization | default('') }}"
+    internal_debug_enabled: "{{ hostvars['localhost'].internal_debug_enabled | default('false') }}"
+    claim_api_key_id: "{{ hostvars['localhost'].claim_api_key_id | default('') }}"
+    claim_api_private_key: "{{ hostvars['localhost'].claim_api_private_key | default('') }}"
+    claim_api_uri: "{{ hostvars['localhost'].claim_api_uri | default('https://intersight.com/api/v1') }}"
+    claim_intersight_validate_certs: "{{ hostvars['localhost'].claim_intersight_validate_certs | default(false) | bool }}"
+    claim_endpoint_validate_certs: "{{ hostvars['localhost'].claim_endpoint_validate_certs | default(false) | bool }}"
+    internal_helper_timeout_seconds: "{{ hostvars['localhost'].internal_helper_timeout_seconds | default(20) }}"
+    debug_artifact_dir: "{{ hostvars['localhost'].debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}"
+  tasks:
+    - name: Run SaaS claim for current endpoint
+      ansible.builtin.include_tasks: tasks/process_endpoint.yml
+      tags:
+        - configure
+        - claim
+        - verify
+        - aggregate
+
+- name: Aggregate SaaS claim outputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
     - name: Export claim aggregate contract
       ansible.builtin.set_fact:
         batch_status: "{{ 'failed' if (failed_result_items | length) > 0 else 'successful' }}"

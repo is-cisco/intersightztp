@@ -2,6 +2,21 @@
 
 ## Blueprint inputs
 
+Preferred Torque entrypoints:
+
+- [blueprints/onboard_endpoints_intersight_saas.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_saas.yaml)
+- [blueprints/onboard_endpoints_intersight_appliance.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_appliance.yaml)
+
+Use the split onboarding blueprints instead:
+[blueprints/onboard_endpoints_intersight_saas.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_saas.yaml)
+and
+[blueprints/onboard_endpoints_intersight_appliance.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_appliance.yaml)
+
+The mechanism-split blueprints also remain available for later work:
+
+- [blueprints/onboard_endpoints_device_connector.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_device_connector.yaml)
+- [blueprints/onboard_endpoints_credential_targets.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_credential_targets.yaml)
+
 ### `agent`
 
 - type: `agent`
@@ -87,7 +102,8 @@ Example:
 
 - type: `string`
 - title: `Intersight API URI`
-- default: `"https://intersight.com/api/v1"`
+- meaning: API base URI used for validation and claim operations
+- guidance: hosts ending in `.intersight.com` should use the SaaS blueprint; other hosts or raw IPs should use the appliance blueprint
 
 ### `organization`
 
@@ -125,11 +141,12 @@ Example:
 
 ## Grain outputs
 
-### `asset_discovery_inventory`
+### `asset_discovery`
 
 - `generated_inventory_yaml`
 - `generated_inventory_json`
 - `generated_inventory_endpoints_json`
+- `discovery_results_json`
 
 ### `check_and_reset_default_password`
 
@@ -159,6 +176,38 @@ Implementation note:
 
 - in the modular variant, `claim_to_intersight` uses a local custom Ansible module for claim
   submission instead of relying on `cisco.intersight.intersight_target_claim`
+
+### `platform_type_resolve`
+
+- `platform_resolution_results_json`
+- `appliance_claim_candidates_json`
+
+Implementation notes:
+
+- this grain derives appliance `PlatformType` values from discovery results
+- it also passes through reservation information when present
+- it performs logical-target dedup before appliance claim submission
+
+### `claim_to_appliance`
+
+- `batch_status`
+- `successful_endpoints`
+- `failed_endpoints`
+- `conflict_endpoints`
+- `non_intersight_managed_targets`
+- `skipped_endpoints`
+- `changed_endpoints`
+- `results_json`
+- `workflow_results_json`
+
+Implementation notes:
+
+- appliance claim uses direct `POST /appliance/DeviceClaims`
+- appliance claim intentionally omits `RequestId` so the appliance generates a unique request identifier per claim
+- `results_json` keeps the same top-level status contract as SaaS
+- `workflow_results_json` exposes the matching `Device registration request` workflow records
+- the newest matching workflow is merged back into each appliance result as supplemental fields such as `latest_workflow_status` and `latest_workflow_progress`
+- this grain does not yet wait for workflow completion before returning
 
 ## Destroy outputs
 

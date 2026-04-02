@@ -5,7 +5,7 @@
       {{
         (
           prepared_targets
-          | selectattr('endpoint', 'equalto', (endpoint | default(ansible_host | default(inventory_hostname))))
+          | selectattr('endpoint', 'equalto', (endpoint | default(inventory_hostname)))
           | list
           | first
         )
@@ -15,7 +15,7 @@
 - name: Skip claim submission when host is not prepared
   ansible.builtin.set_fact:
     claim_readiness_result:
-      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      endpoint: "{{ endpoint | default(inventory_hostname) }}"
       organization: "{{ organization | default('') }}"
       status: skipped
       changed: false
@@ -24,7 +24,7 @@
         - Host was not marked ready by device_connector_prepare
     claim_ready_target_result: {}
     claim_result:
-      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      endpoint: "{{ endpoint | default(inventory_hostname) }}"
       organization: "{{ organization | default('') }}"
       status: skipped
       changed: false
@@ -39,7 +39,7 @@
       - "{{ ansible_playbook_python }}"
       - "{{ playbook_dir }}/tools/run_claim_readiness.py"
   environment:
-    ENDPOINT: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+    ENDPOINT: "{{ endpoint | default(inventory_hostname) }}"
     SOURCE_ENTRY_TYPE: "{{ source_entry_type | default('single') }}"
     LOCATION: "{{ location | default('') }}"
     DESIRED_CREDENTIALS_JSON: "{{ desired_credentials | default([]) | to_json }}"
@@ -63,6 +63,19 @@
     target_claim_context: "{{ claim_readiness_payload.claim_ready_target | default({}) }}"
   when: (endpoint_prepared_context | length) > 0
 
+- name: Resolve normalized logical claim key
+  ansible.builtin.set_fact:
+    normalized_claim_key: "{{ target_claim_context.normalized_claim_key | default(target_claim_context.claim_serial_number | default('')) }}"
+    canonical_claim_endpoint: "{{ (seen_claim_target_map | default({})).get((target_claim_context.normalized_claim_key | default(target_claim_context.claim_serial_number | default(''))), '') }}"
+    claim_duplicate_detected: >-
+      {{
+        (target_claim_context | default({}) | length) > 0
+        and (target_claim_context.claim_submission_required | default(true) | bool)
+        and ((target_claim_context.normalized_claim_key | default(target_claim_context.claim_serial_number | default('')) | string | trim | length) > 0)
+        and (((seen_claim_target_map | default({})).get((target_claim_context.normalized_claim_key | default(target_claim_context.claim_serial_number | default(''))), '') | string | trim | length) > 0)
+      }}
+  when: (endpoint_prepared_context | length) > 0
+
 - name: Ensure claim debug artifact directory exists
   ansible.builtin.file:
     path: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}"
@@ -74,7 +87,7 @@
 
 - name: Write claim readiness helper debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_readiness.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_claim_readiness.json"
     mode: "0600"
     content: |-
       {{
@@ -106,12 +119,35 @@
     - (endpoint_prepared_context | length) > 0
     - (target_claim_context | default({}) | length) == 0
 
+- name: Skip duplicate logical target before claim submission
+  ansible.builtin.set_fact:
+    claim_result:
+      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      canonical_endpoint: "{{ canonical_claim_endpoint }}"
+      organization: "{{ organization | default('') }}"
+      device_type: "{{ target_claim_context.device_type | default('unknown') }}"
+      normalized_claim_key: "{{ normalized_claim_key | default('') }}"
+      status: skipped
+      changed: false
+      reason: duplicate_logical_target
+      verification_count: 0
+      verification_failed: false
+      registration_found: false
+      registration_moid: ''
+      messages:
+        - "Skipped claim submission because this endpoint resolves to the same logical target as {{ canonical_claim_endpoint }}."
+  when:
+    - (target_claim_context | default({}) | length) > 0
+    - claim_duplicate_detected | default(false) | bool
+
 - name: Record already-claimed target without resubmitting claim
   ansible.builtin.set_fact:
     claim_result:
-      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      canonical_endpoint: "{{ endpoint | default(inventory_hostname) }}"
       organization: "{{ organization | default('') }}"
       device_type: "{{ target_claim_context.device_type | default('unknown') }}"
+      normalized_claim_key: "{{ normalized_claim_key | default('') }}"
       status: already_claimed
       changed: false
       reason: already_compliant
@@ -124,6 +160,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - not (target_claim_context.claim_submission_required | default(true) | bool)
+    - not (claim_duplicate_detected | default(false) | bool)
 
 - name: Validate claim submission inputs
   ansible.builtin.assert:
@@ -136,6 +173,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
 
 - name: Submit SaaS device claim
   intersight_scoped_claim:
@@ -152,6 +190,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
 
 - name: Derive claim error text
   ansible.builtin.set_fact:
@@ -159,10 +198,11 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
 
 - name: Write claim submission debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_submission.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_claim_submission.json"
     mode: "0600"
     content: |-
       {{
@@ -176,6 +216,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
     - role_debug_enabled | default('false') | bool
 
 - name: Derive claim module error state
@@ -194,6 +235,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
 
 - name: Verify SaaS device registration exists
   cisco.intersight.intersight_rest_api:
@@ -212,6 +254,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
     - not (saas_claim_result.failed | default(false) | bool)
     - not claim_module_error
 
@@ -236,6 +279,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
 
 - name: Read claimed registration by Moid
   cisco.intersight.intersight_rest_api:
@@ -251,13 +295,14 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
     - not (saas_claim_result.failed | default(false) | bool)
     - not claim_module_error
     - (claimed_registration_moid | default('') | string | trim | length) > 0
 
 - name: Write claimed registration lookup debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_registration_lookup.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_registration_lookup.json"
     mode: "0600"
     content: |-
       {{
@@ -269,6 +314,7 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
     - role_debug_enabled | default('false') | bool
 
 - name: Resolve zero-touch metadata tags
@@ -336,7 +382,7 @@
 
 - name: Write registration tag update debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_tag_update.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_tag_update.json"
     mode: "0600"
     content: "{{ {'registration_tag_update_result': (registration_tag_update_result | default({}))} | to_nice_json }}"
   when:
@@ -347,9 +393,11 @@
 - name: Record SaaS claim result
   ansible.builtin.set_fact:
     claim_result:
-      endpoint: "{{ endpoint | default(ansible_host | default(inventory_hostname)) }}"
+      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      canonical_endpoint: "{{ endpoint | default(inventory_hostname) }}"
       organization: "{{ organization | default('') }}"
       device_type: "{{ target_claim_context.device_type | default('unknown') }}"
+      normalized_claim_key: "{{ normalized_claim_key | default('') }}"
       status: >-
         {%- if 'already' in claim_error_text_lower and 'claim' in claim_error_text_lower -%}
         failed
@@ -410,10 +458,11 @@
   when:
     - (target_claim_context | default({}) | length) > 0
     - target_claim_context.claim_submission_required | default(true) | bool
+    - not (claim_duplicate_detected | default(false) | bool)
 
 - name: Write final per-endpoint claim result debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(ansible_host | default(inventory_hostname))) | replace('/', '_') }}_claim_result.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_claim_result.json"
     mode: "0600"
     content: "{{ claim_result | to_nice_json }}"
   when:

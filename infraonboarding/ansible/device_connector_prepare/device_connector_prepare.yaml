@@ -1,6 +1,6 @@
 ---
-- name: Prepare device connector
-  hosts: "{{ group | default('localhost') }}"
+- name: Build dynamic inventory for connector preparation
+  hosts: localhost
   connection: local
   gather_facts: false
   any_errors_fatal: true
@@ -42,16 +42,14 @@
         - validate
         - precheck
   tasks:
-    - name: Initialize connector preparation outputs
-      ansible.builtin.set_fact:
-        connector_prep_results: []
-        prepared_endpoints: []
-      tags:
-        - always
-        - outputs
-
-    - name: Process connector preparation endpoints
-      ansible.builtin.include_tasks: tasks/process_endpoint.yml
+    - name: Add generated endpoints to dynamic connector preparation group
+      ansible.builtin.add_host:
+        name: "{{ endpoint_item.key }}"
+        groups: connector_prepare_targets
+        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.value.ansible_host | default(endpoint_item.key)) }}"
+        source_entry_type: "{{ endpoint_item.value.source_entry_type | default('single') }}"
+        location: "{{ endpoint_item.value.location | default('') }}"
+        desired_credentials: "{{ endpoint_item.value.desired_credentials | default([]) }}"
       loop: "{{ endpoint_host_items }}"
       loop_control:
         loop_var: endpoint_item
@@ -61,6 +59,64 @@
         - prepare
         - verify
         - aggregate
+
+- name: Prepare device connector per endpoint
+  hosts: connector_prepare_targets
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    generated_inventory_input: "{{ generated_inventory_json | default('{}') }}"
+    generated_inventory_payload: >-
+      {{
+        generated_inventory_input
+        if (generated_inventory_input is not string)
+        else (
+          (generated_inventory_input | from_yaml)
+          if (generated_inventory_input | string | trim | length) > 0
+          else {}
+        )
+      }}
+    password_stage_ready_endpoints_input: "{{ password_reset_ready_endpoints_json | default('[]') }}"
+    password_stage_ready_endpoints: "{{ password_stage_ready_endpoints_input if (password_stage_ready_endpoints_input is not string) else ((password_stage_ready_endpoints_input | from_yaml) if (password_stage_ready_endpoints_input | string | trim | length) > 0 else []) }}"
+    inventory_desired_credentials: "{{ generated_inventory_payload.all.vars.desired_credentials | default([]) }}"
+    internal_debug_enabled: "{{ debug_enabled | default('false') }}"
+    internal_helper_timeout_seconds: 20
+    debug_artifact_dir: "/tmp/endpoint_onboarding-debug/device_connector_prepare"
+  tasks:
+    - name: Run connector preparation for current endpoint
+      ansible.builtin.include_tasks: tasks/process_endpoint.yml
+      tags:
+        - validate
+        - prepare
+        - verify
+        - aggregate
+
+- name: Aggregate connector preparation outputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    connector_prepare_target_hosts: "{{ groups['connector_prepare_targets'] | default([]) }}"
+    connector_prep_results: >-
+      {{
+        connector_prepare_target_hosts
+        | map('extract', hostvars, 'host_connector_prep_result')
+        | reject('equalto', None)
+        | reject('equalto', {})
+        | list
+      }}
+    prepared_endpoints: >-
+      {{
+        connector_prepare_target_hosts
+        | map('extract', hostvars, 'host_prepared_target_result')
+        | reject('equalto', None)
+        | reject('equalto', {})
+        | list
+      }}
+    debug_artifact_dir: "/tmp/endpoint_onboarding-debug/device_connector_prepare"
+  tasks:
 
     - name: Export connector preparation aggregate contract
       ansible.builtin.set_fact:

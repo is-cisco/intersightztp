@@ -1,0 +1,2 @@
+---
+- import_playbook: claim_to_appliance.yaml

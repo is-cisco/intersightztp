@@ -1,6 +1,6 @@
 # endpoint_onboarding
 
-Inventory-first endpoint onboarding workflow for claiming Cisco IMC endpoints into Intersight.
+Inventory-first endpoint onboarding workflow for claiming Cisco endpoints into Intersight.
 This modular variant keeps the stable workflow shape but refactors the claim path
 toward a narrower custom-module design.
 
@@ -10,7 +10,26 @@ This repo replaces the older JSON batch handoff model with an inventory-driven A
 The blueprint still accepts JSON launch inputs, but it converts them into generated inventory and
 then runs the rest of the workflow per host.
 
+## Blueprint entrypoints
+
+Preferred Torque entrypoints:
+
+- [blueprints/onboard_endpoints_intersight_saas.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_saas.yaml)
+- [blueprints/onboard_endpoints_intersight_appliance.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_appliance.yaml)
+
+Use the split onboarding blueprints for Torque launches:
+
+- [blueprints/onboard_endpoints_intersight_saas.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_saas.yaml)
+- [blueprints/onboard_endpoints_intersight_appliance.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_intersight_appliance.yaml)
+
+The mechanism-split blueprints remain in the repo for later work:
+
+- [blueprints/onboard_endpoints_device_connector.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_device_connector.yaml)
+- [blueprints/onboard_endpoints_credential_targets.yaml](/Users/rkrishn2/intersightztp/blueprints/onboard_endpoints_credential_targets.yaml)
+
 ## Validated flow
+
+For SaaS runs:
 
 1. `validate_target_org`
 2. `asset_discovery`
@@ -18,6 +37,37 @@ then runs the rest of the workflow per host.
 4. `device_connector_prepare`
 5. `claim_to_intersight`
 
+For appliance runs:
+
+1. `validate_target_org`
+2. `asset_discovery`
+3. `check_and_reset_default_password`
+4. `device_connector_prepare`
+5. `platform_type_resolve`
+6. `claim_to_appliance`
+
+## Recommended launch pattern
+
+For SaaS:
+
+- use the SaaS blueprint
+- use the `.intersight.com` API URI
+- let the workflow retrieve device identifiers and security tokens from the endpoints
+
+For appliance:
+
+- use the appliance blueprint
+- use the appliance API URI
+- use the appliance credential claim path
+- leave the appliance Device Connector token path for later work
+
+Mode detail for the credential-target path:
+
+1. `validate_target_org`
+2. `asset_discovery`
+3. `check_and_reset_default_password`
+4. `platform_type_resolve`
+5. `claim_to_appliance`
 ## Most users only need these inputs
 
 - `agent` (`Torque Agent`)
@@ -34,16 +84,6 @@ Advanced inputs:
 - `organization` (`Intersight Organization`)
 - `destroy_behavior` (`Destroy Behavior`)
 - `debug_enabled` (`Enable Debug Mode`)
-
-## Recommended launch pattern
-
-For most runs:
-
-- leave `api_uri` at `https://intersight.com/api/v1`
-- Intersight certificate validation is currently forced to `false` in the blueprint
-- leave `destroy_behavior` as `"noop"`
-- leave `debug_enabled` as `"false"`
-- only provide `factory_credentials_json` when you expect first-boot or forced password-change behavior
 
 ## Copy-paste examples
 
@@ -108,11 +148,13 @@ Endpoints may override `location` individually when finer-grained placement is n
 - stores desired and factory/default credentials as run-scoped generated inventory vars
 - applies an optional run-level `location` to all endpoints unless an endpoint overrides it
 - checks whether the desired password already works before attempting a reset
-- prepares connector state per host
-- retrieves claim serials and tokens inside the claim grain only for hosts that need claim submission
-- submits SaaS claims and verifies `asset.DeviceRegistrations`
+- for SaaS runs, prepares connector state per host
+- for SaaS runs, retrieves claim serials and tokens inside the claim grain only for hosts that need claim submission
+- for SaaS runs, submits claims and verifies `asset.DeviceRegistrations`
+- for appliance runs, resolves `platform_type`, submits direct appliance claim requests, and records the newest matching `Device registration request` workflow in the result contract
+- for appliance runs, omits `RequestId` from the claim payload so the appliance generates a unique value per request
 - carries `organization` as the user-facing scope input for claim
-- uses a narrow local custom Ansible module for the missing organization-aware claim behavior
+- uses narrow local custom Ansible code only where the official collection does not cover the required claim behavior
 - supports optional destroy-time unclaim for the tested IMC path
 
 ## Validated scenarios
@@ -120,6 +162,8 @@ Endpoints may override `location` individually when finer-grained placement is n
 - single IMC host already claimed
 - single IMC host ready for claim and successfully claimed
 - mixed batch where some hosts are already claimed and others are submitted in the same run
+- appliance claim submission with workflow lookup and workflow-aware result enrichment
+- appliance batch submission validated with five fresh `DeviceClaim` records in one run after removing the caller-supplied `RequestId`
 - tested IMC unclaim path using the regional Intersight API endpoint and asynchronous verification
 
 ## Runtime dependencies

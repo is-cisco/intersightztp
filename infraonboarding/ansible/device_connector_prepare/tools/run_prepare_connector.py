@@ -229,6 +229,7 @@ def try_prepare_with_credential(
             result = {
                 "endpoint": endpoint,
                 "device_type": "imc",
+                "credential_username": username,
                 "connector_status": "ready",
                 "status": "ready_for_claim",
                 "changed": False,
@@ -238,7 +239,10 @@ def try_prepare_with_credential(
                 "account_ownership_state": extract_value(item, "AccountOwnershipState", "AccountOwnershipStatus"),
                 "connector_enabled": normalize_bool(extract_value(item, "AdminState", "Adminstate", "Enabled")),
             }
-            return build_prepared_target(base_target, "imc"), result, errors
+            prepared_target = build_prepared_target(base_target, "imc")
+            prepared_target["username"] = username
+            prepared_target["password"] = password
+            return prepared_target, result, errors
         finally:
             logout_with_xml_api(session, endpoint, headers, verify_ssl=verify_ssl, timeout=timeout)
             session.close()
@@ -253,6 +257,7 @@ def try_prepare_with_credential(
             result = {
                 "endpoint": endpoint,
                 "device_type": "imm",
+                "credential_username": username,
                 "connector_status": "ready",
                 "status": "ready_for_claim",
                 "changed": False,
@@ -262,7 +267,10 @@ def try_prepare_with_credential(
                 "account_ownership_state": extract_value(item, "AccountOwnershipState", "AccountOwnershipStatus"),
                 "connector_enabled": normalize_bool(extract_value(item, "AdminState", "Adminstate", "Enabled")),
             }
-            return build_prepared_target(base_target, "imm"), result, errors
+            prepared_target = build_prepared_target(base_target, "imm")
+            prepared_target["username"] = username
+            prepared_target["password"] = password
+            return prepared_target, result, errors
         finally:
             logout_with_imm_session(session, endpoint, headers, verify_ssl=verify_ssl, timeout=timeout)
             session.close()

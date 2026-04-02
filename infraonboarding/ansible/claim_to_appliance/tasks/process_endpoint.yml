@@ -1,0 +1,104 @@
+---
+- name: Validate appliance claim candidate fields
+  ansible.builtin.assert:
+    that:
+      - endpoint | default(inventory_hostname) | string | trim | length > 0
+      - username | default('') | string | trim | length > 0
+      - password | default('') | string | trim | length > 0
+      - platform_type | default('') | string | trim | length > 0
+    fail_msg: "Appliance claim candidate is missing endpoint, username, password, or platform_type"
+  no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+
+- name: Build appliance claim request body
+  ansible.builtin.set_fact:
+    appliance_claim_body: >-
+      {{
+        {
+          'Hostname': endpoint | default(inventory_hostname),
+          'Username': username,
+          'Password': password,
+          'PlatformType': platform_type
+        }
+        | combine(
+            {'Reservation': reservation},
+            recursive=True
+          )
+        if (reservation | default('') | string | trim | length) > 0
+        else
+        {
+          'Hostname': endpoint | default(inventory_hostname),
+          'Username': username,
+          'Password': password,
+          'PlatformType': platform_type
+        }
+      }}
+  no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+
+- name: Submit direct appliance claim request
+  cisco.intersight.intersight_rest_api:
+    api_key_id: "{{ api_key_id }}"
+    api_private_key: "{{ api_private_key }}"
+    api_uri: "{{ claim_api_uri }}"
+    validate_certs: "{{ claim_validate_certs }}"
+    resource_path: /appliance/DeviceClaims
+    update_method: post
+    api_body: "{{ appliance_claim_body }}"
+  register: appliance_claim_result
+  failed_when: false
+  no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+
+- name: Derive appliance claim error text
+  ansible.builtin.set_fact:
+    appliance_claim_error_text: "{{ (appliance_claim_result.msg | default('')) ~ ' ' ~ (appliance_claim_result.api_response | default({}) | to_json) }}"
+    appliance_claim_error_text_lower: "{{ (((appliance_claim_result.msg | default('')) ~ ' ' ~ (appliance_claim_result.api_response | default({}) | to_json)) | lower) }}"
+
+- name: Build normalized appliance claim result
+  ansible.builtin.set_fact:
+    host_claim_result:
+      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      canonical_endpoint: "{{ canonical_endpoint | default(endpoint | default(inventory_hostname)) }}"
+      organization: "{{ organization | default('') }}"
+      device_type: "{{ device_type | default('unknown') }}"
+      platform_type: "{{ platform_type }}"
+      management_mode: appliance
+      normalized_claim_key: "{{ normalized_claim_key | default(endpoint | default(inventory_hostname)) }}"
+      status: >-
+        {%- if 'already' in appliance_claim_error_text_lower and 'claim' in appliance_claim_error_text_lower -%}
+        already_claimed
+        {%- elif 'already exists' in appliance_claim_error_text_lower -%}
+        already_claimed
+        {%- elif 'conflict' in appliance_claim_error_text_lower -%}
+        conflict
+        {%- elif (appliance_claim_result.failed | default(false) | bool) -%}
+        failed
+        {%- else -%}
+        submitted
+        {%- endif -%}
+      changed: "{{ appliance_claim_result.changed | default(false) | bool }}"
+      reason: >-
+        {%- if 'already' in appliance_claim_error_text_lower and 'claim' in appliance_claim_error_text_lower -%}
+        already_compliant
+        {%- elif 'already exists' in appliance_claim_error_text_lower -%}
+        already_compliant
+        {%- elif 'conflict' in appliance_claim_error_text_lower -%}
+        conflict
+        {%- elif (appliance_claim_result.failed | default(false) | bool) -%}
+        claim_submission_failed
+        {%- else -%}
+        claimed_and_configured
+        {%- endif -%}
+      registration_found: false
+      registration_moid: ""
+      messages:
+        - >-
+          {%- if 'already' in appliance_claim_error_text_lower and 'claim' in appliance_claim_error_text_lower -%}
+          Appliance reports the target is already claimed.
+          {%- elif 'already exists' in appliance_claim_error_text_lower -%}
+          Appliance reports the target already exists.
+          {%- elif 'conflict' in appliance_claim_error_text_lower -%}
+          Appliance returned a conflict while claiming the target.
+          {%- elif (appliance_claim_result.failed | default(false) | bool) -%}
+          {{ appliance_claim_result.msg | default('Appliance claim submission failed') }}
+          {%- else -%}
+          Appliance claim submitted successfully.
+          {%- endif -%}

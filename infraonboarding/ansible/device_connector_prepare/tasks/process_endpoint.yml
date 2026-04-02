@@ -3,11 +3,10 @@
   ansible.builtin.include_role:
     name: prepare_connector
   vars:
-    endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.value.ansible_host | default(endpoint_item.key)) }}"
-    ansible_host: "{{ endpoint_item.value.ansible_host | default(endpoint_item.value.endpoint | default(endpoint_item.key)) }}"
-    source_entry_type: "{{ endpoint_item.value.source_entry_type | default('single') }}"
-    location: "{{ endpoint_item.value.location | default('') }}"
-    desired_credentials: "{{ endpoint_item.value.desired_credentials | default(inventory_desired_credentials) }}"
+    endpoint: "{{ endpoint | default(inventory_hostname) }}"
+    source_entry_type: "{{ source_entry_type | default('single') }}"
+    location: "{{ location | default('') }}"
+    desired_credentials: "{{ desired_credentials | default(inventory_desired_credentials) }}"
     ready_targets: "{{ password_stage_ready_endpoints }}"
     role_debug_enabled: "{{ internal_debug_enabled }}"
     role_debug_artifact_dir: "{{ debug_artifact_dir }}"
@@ -16,9 +15,10 @@
 
 - name: Collect connector preparation result for endpoint
   ansible.builtin.set_fact:
-    connector_prep_results: "{{ connector_prep_results + [connector_prepare_result] }}"
-    prepared_endpoints: >-
+    host_connector_prep_result: "{{ connector_prepare_result }}"
+    host_prepared_target_result: >-
       {{
-        prepared_endpoints
-        + ([prepared_target_result] if ((prepared_target_result | default({}) | type_debug == 'dict') and ((prepared_target_result | default({}) | length) > 0) and connector_prepare_result.status == 'ready_for_claim') else [])
+        prepared_target_result
+        if ((prepared_target_result | default({}) | type_debug == 'dict') and ((prepared_target_result | default({}) | length) > 0) and connector_prepare_result.status == 'ready_for_claim')
+        else {}
       }}
