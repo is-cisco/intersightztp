@@ -58,11 +58,25 @@ outputs:
     value: '{{ .grains.devices_readiness.outputs.not_ready_devices_json }}'
 
 grains:
-  devices_readiness:
+  bootstrap_collections:
     kind: ansible
     spec:
       source:
-        store: intersightztp
+        store: intersightztptest
+        path: domainprofile/ansible/bootstrap_collections/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+  devices_readiness:
+    kind: ansible
+    depends-on: bootstrap_collections
+    spec:
+      source:
+        store: intersightztptest
         path: devicesreadiness/ansible/devices_readiness/playbook.yaml
         # Match the modular repo layout by keeping grains under the product folder and using a concrete playbook path.
       agent:
@@ -89,7 +103,7 @@ grains:
         - not_ready_devices_json
     on-destroy:
       - source:
-          store: intersightztp
+          store: intersightztptest
           path: devicesreadiness/ansible/devices_readiness/teardown.yaml
         inventory-file:
           localhost:

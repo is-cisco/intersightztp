@@ -71,7 +71,7 @@ grains:
     kind: ansible
     spec:
       source:
-        store: intersightztp
+        store: intersightztptest
         path: domainprofile/ansible/bootstrap_collections/playbook.yaml
       command-arguments: -vvv
       agent:
@@ -85,7 +85,7 @@ grains:
     depends-on: bootstrap_collections
     spec:
       source:
-        store: intersightztp
+        store: intersightztptest
         path: domainprofile/ansible/network_intent_provisioning/playbook.yaml
       command-arguments: -vvv
       agent:
@@ -123,7 +123,7 @@ grains:
         - intersight_trace_ids_json
       on-destroy:
         source:
-          store: intersightztp
+          store: intersightztptest
           path: domainprofile/ansible/network_intent_provisioning/teardown.yaml
         inventory-file:
           localhost:

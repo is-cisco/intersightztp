@@ -75,7 +75,7 @@ grains:
     kind: ansible
     spec:
       source:
-        store: intersightztp
+        store: intersightztptest
         path: domainprofile/ansible/bootstrap_collections/playbook.yaml
       command-arguments: -vvv
       agent:
@@ -89,7 +89,7 @@ grains:
     depends-on: bootstrap_collections
     spec:
       source:
-        store: intersightztp
+        store: intersightztptest
         path: domainprofile/ansible/domain_profile_deployment/playbook.yaml
       command-arguments: -vvv
       agent:
@@ -126,7 +126,7 @@ grains:
         - tac_handoff_json
       on-destroy:
         source:
-          store: intersightztp
+          store: intersightztptest
           path: domainprofile/ansible/domain_profile_deployment/teardown.yaml
         inventory-file:
           localhost:
