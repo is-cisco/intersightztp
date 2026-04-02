@@ -1,12 +1,12 @@
 ---
 - name: Resolve endpoint context
   ansible.builtin.set_fact:
-    resolved_endpoint: "{{ endpoint | default(inventory_hostname) }}"
+    resolved_endpoint: "{{ inventory_hostname | replace('_', '.') }}"
     ready_endpoint_context: >-
       {{
         (
           password_stage_ready_endpoints
-          | selectattr('endpoint', 'equalto', (endpoint | default(inventory_hostname)))
+          | selectattr('endpoint', 'equalto', resolved_endpoint)
           | list
           | first
         )
@@ -16,7 +16,7 @@
       {{
         (
           prepared_endpoints
-          | selectattr('endpoint', 'equalto', (endpoint | default(inventory_hostname)))
+          | selectattr('endpoint', 'equalto', resolved_endpoint)
           | list
           | first
         )
@@ -33,7 +33,7 @@
       {{
         (
           discovery_results
-          | selectattr('endpoint', 'equalto', (endpoint | default(inventory_hostname)))
+          | selectattr('endpoint', 'equalto', resolved_endpoint)
           | list
           | first
         )

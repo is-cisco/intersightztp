@@ -3,10 +3,10 @@
   ansible.builtin.include_role:
     name: prepare_connector
   vars:
-    endpoint: "{{ endpoint | default(inventory_hostname) }}"
-    source_entry_type: "{{ source_entry_type | default('single') }}"
-    location: "{{ location | default('') }}"
-    desired_credentials: "{{ desired_credentials | default(inventory_desired_credentials) }}"
+    endpoint: "{{ inventory_hostname | replace('_', '.') }}"
+    source_entry_type: "single"
+    location: ""
+    desired_credentials: "{{ inventory_desired_credentials }}"
     ready_targets: "{{ password_stage_ready_endpoints }}"
     role_debug_enabled: "{{ internal_debug_enabled }}"
     role_debug_artifact_dir: "{{ debug_artifact_dir }}"

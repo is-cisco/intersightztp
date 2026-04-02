@@ -1,8 +1,12 @@
 ---
+- name: Resolve concrete endpoint for appliance claim flow
+  ansible.builtin.set_fact:
+    resolved_endpoint: "{{ inventory_hostname | replace('_', '.') }}"
+
 - name: Validate appliance claim candidate fields
   ansible.builtin.assert:
     that:
-      - endpoint | default(inventory_hostname) | string | trim | length > 0
+      - resolved_endpoint | string | trim | length > 0
       - username | default('') | string | trim | length > 0
       - password | default('') | string | trim | length > 0
       - platform_type | default('') | string | trim | length > 0
@@ -14,7 +18,7 @@
     appliance_claim_body: >-
       {{
         {
-          'Hostname': endpoint | default(inventory_hostname),
+          'Hostname': resolved_endpoint,
           'Username': username,
           'Password': password,
           'PlatformType': platform_type
@@ -26,7 +30,7 @@
         if (reservation | default('') | string | trim | length) > 0
         else
         {
-          'Hostname': endpoint | default(inventory_hostname),
+          'Hostname': resolved_endpoint,
           'Username': username,
           'Password': password,
           'PlatformType': platform_type
@@ -55,13 +59,13 @@
 - name: Build normalized appliance claim result
   ansible.builtin.set_fact:
     host_claim_result:
-      endpoint: "{{ endpoint | default(inventory_hostname) }}"
-      canonical_endpoint: "{{ canonical_endpoint | default(endpoint | default(inventory_hostname)) }}"
+      endpoint: "{{ resolved_endpoint }}"
+      canonical_endpoint: "{{ canonical_endpoint | default(resolved_endpoint) }}"
       organization: "{{ organization | default('') }}"
       device_type: "{{ device_type | default('unknown') }}"
       platform_type: "{{ platform_type }}"
       management_mode: appliance
-      normalized_claim_key: "{{ normalized_claim_key | default(endpoint | default(inventory_hostname)) }}"
+      normalized_claim_key: "{{ normalized_claim_key | default(resolved_endpoint) }}"
       status: >-
         {%- if 'already' in appliance_claim_error_text_lower and 'claim' in appliance_claim_error_text_lower -%}
         already_claimed

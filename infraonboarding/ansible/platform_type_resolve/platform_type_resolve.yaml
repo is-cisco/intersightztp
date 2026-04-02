@@ -77,8 +77,7 @@
       ansible.builtin.add_host:
         name: "{{ endpoint_item.key }}"
         groups: platform_resolution_targets
-        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.value.ansible_host | default(endpoint_item.key)) }}"
-        ansible_host: "{{ endpoint_item.value.ansible_host | default(endpoint_item.value.endpoint | default(endpoint_item.key)) }}"
+        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.key) }}"
         location: "{{ endpoint_item.value.location | default('') }}"
         desired_credentials: "{{ endpoint_item.value.desired_credentials | default([]) }}"
         reservation: "{{ endpoint_item.value.reservation | default(endpoint_item.value.Reservation | default('')) }}"

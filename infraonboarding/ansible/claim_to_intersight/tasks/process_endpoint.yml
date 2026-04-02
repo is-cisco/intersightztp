@@ -3,10 +3,10 @@
   ansible.builtin.include_role:
     name: claim_device
   vars:
-    endpoint: "{{ endpoint | default(inventory_hostname) }}"
-    source_entry_type: "{{ source_entry_type | default('single') }}"
-    location: "{{ location | default('') }}"
-    desired_credentials: "{{ desired_credentials | default(inventory_desired_credentials) }}"
+    endpoint: "{{ inventory_hostname | replace('_', '.') }}"
+    source_entry_type: "single"
+    location: ""
+    desired_credentials: "{{ inventory_desired_credentials }}"
     deployment_name: "{{ internal_deployment_name }}"
     organization: "{{ internal_organization }}"
     prepared_targets: "{{ prepared_endpoint_items }}"

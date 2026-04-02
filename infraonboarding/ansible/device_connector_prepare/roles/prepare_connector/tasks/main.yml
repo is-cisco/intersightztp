@@ -1,15 +1,19 @@
 ---
+- name: Resolve concrete endpoint for connector preparation
+  ansible.builtin.set_fact:
+    resolved_endpoint: "{{ inventory_hostname | replace('_', '.') }}"
+
 - name: Determine whether host is ready for connector preparation
   ansible.builtin.set_fact:
     host_ready_for_connector_prepare: >-
       {{
-        (ready_targets | selectattr('endpoint', 'equalto', (endpoint | default(inventory_hostname))) | list | length > 0)
+        (ready_targets | selectattr('endpoint', 'equalto', resolved_endpoint) | list | length > 0)
       }}
 
 - name: Skip connector preparation when host is not ready
   ansible.builtin.set_fact:
     connector_prepare_result:
-      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      endpoint: "{{ resolved_endpoint }}"
       status: skipped
       changed: false
       reason: not_ready_after_password_stage
@@ -24,7 +28,7 @@
       - "{{ ansible_playbook_python }}"
       - "{{ playbook_dir }}/tools/run_prepare_connector.py"
   environment:
-    ENDPOINT: "{{ endpoint | default(inventory_hostname) }}"
+    ENDPOINT: "{{ resolved_endpoint }}"
     SOURCE_ENTRY_TYPE: "{{ source_entry_type | default('single') }}"
     LOCATION: "{{ location | default('') }}"
     DESIRED_CREDENTIALS_JSON: "{{ desired_credentials | to_json }}"
@@ -57,7 +61,7 @@
 
 - name: Write connector preparation helper debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/device_connector_prepare') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_helper.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/device_connector_prepare') }}/{{ resolved_endpoint | replace('/', '_') }}_helper.json"
     mode: "0600"
     content: "{{ connector_prepare_payload | to_nice_json }}"
   when:

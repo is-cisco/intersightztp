@@ -73,7 +73,7 @@
 
     - name: Check endpoint TCP reachability on management port
       ansible.builtin.wait_for:
-        host: "{{ item.value.endpoint | default(item.value.ansible_host | default(item.key)) }}"
+        host: "{{ item.value.endpoint | default(item.key) }}"
         port: "{{ internal_discovery_management_port | int }}"
         timeout: "{{ internal_discovery_wait_for_timeout_seconds | int }}"
         connect_timeout: "{{ internal_discovery_connect_timeout_seconds | int }}"
@@ -94,7 +94,7 @@
         reachability_checked_targets: "{{ (reachability_checked_targets | default([])) + [reachability_target] }}"
       vars:
         reachability_target:
-          endpoint: "{{ item.item.value.endpoint | default(item.item.value.ansible_host | default(item.item.key)) }}"
+          endpoint: "{{ item.item.value.endpoint | default(item.item.key) }}"
           location: "{{ item.item.value.location | default('') }}"
           source_entry_type: "{{ item.item.value.source_entry_type | default('single') }}"
           reachable: "{{ not (item.failed | default(false)) }}"

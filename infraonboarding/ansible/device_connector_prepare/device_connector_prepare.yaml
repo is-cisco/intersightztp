@@ -46,7 +46,7 @@
       ansible.builtin.add_host:
         name: "{{ endpoint_item.key }}"
         groups: connector_prepare_targets
-        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.value.ansible_host | default(endpoint_item.key)) }}"
+        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.key) }}"
         source_entry_type: "{{ endpoint_item.value.source_entry_type | default('single') }}"
         location: "{{ endpoint_item.value.location | default('') }}"
         desired_credentials: "{{ endpoint_item.value.desired_credentials | default([]) }}"

@@ -1,11 +1,15 @@
 ---
+- name: Resolve concrete endpoint for SaaS claim flow
+  ansible.builtin.set_fact:
+    resolved_endpoint: "{{ inventory_hostname | replace('_', '.') }}"
+
 - name: Determine whether host is ready for merged claim flow
   ansible.builtin.set_fact:
     endpoint_prepared_context: >-
       {{
         (
           prepared_targets
-          | selectattr('endpoint', 'equalto', (endpoint | default(inventory_hostname)))
+          | selectattr('endpoint', 'equalto', resolved_endpoint)
           | list
           | first
         )
@@ -15,7 +19,7 @@
 - name: Skip claim submission when host is not prepared
   ansible.builtin.set_fact:
     claim_readiness_result:
-      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      endpoint: "{{ resolved_endpoint }}"
       organization: "{{ organization | default('') }}"
       status: skipped
       changed: false
@@ -24,7 +28,7 @@
         - Host was not marked ready by device_connector_prepare
     claim_ready_target_result: {}
     claim_result:
-      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      endpoint: "{{ resolved_endpoint }}"
       organization: "{{ organization | default('') }}"
       status: skipped
       changed: false
@@ -39,7 +43,7 @@
       - "{{ ansible_playbook_python }}"
       - "{{ playbook_dir }}/tools/run_claim_readiness.py"
   environment:
-    ENDPOINT: "{{ endpoint | default(inventory_hostname) }}"
+    ENDPOINT: "{{ resolved_endpoint }}"
     SOURCE_ENTRY_TYPE: "{{ source_entry_type | default('single') }}"
     LOCATION: "{{ location | default('') }}"
     DESIRED_CREDENTIALS_JSON: "{{ desired_credentials | default([]) | to_json }}"
@@ -87,7 +91,7 @@
 
 - name: Write claim readiness helper debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_claim_readiness.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ resolved_endpoint | replace('/', '_') }}_claim_readiness.json"
     mode: "0600"
     content: |-
       {{
@@ -122,7 +126,7 @@
 - name: Skip duplicate logical target before claim submission
   ansible.builtin.set_fact:
     claim_result:
-      endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      endpoint: "{{ resolved_endpoint }}"
       canonical_endpoint: "{{ canonical_claim_endpoint }}"
       organization: "{{ organization | default('') }}"
       device_type: "{{ target_claim_context.device_type | default('unknown') }}"
@@ -143,8 +147,8 @@
 - name: Record already-claimed target without resubmitting claim
   ansible.builtin.set_fact:
     claim_result:
-      endpoint: "{{ endpoint | default(inventory_hostname) }}"
-      canonical_endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      endpoint: "{{ resolved_endpoint }}"
+      canonical_endpoint: "{{ resolved_endpoint }}"
       organization: "{{ organization | default('') }}"
       device_type: "{{ target_claim_context.device_type | default('unknown') }}"
       normalized_claim_key: "{{ normalized_claim_key | default('') }}"
@@ -202,7 +206,7 @@
 
 - name: Write claim submission debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_claim_submission.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ resolved_endpoint | replace('/', '_') }}_claim_submission.json"
     mode: "0600"
     content: |-
       {{
@@ -302,7 +306,7 @@
 
 - name: Write claimed registration lookup debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_registration_lookup.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ resolved_endpoint | replace('/', '_') }}_registration_lookup.json"
     mode: "0600"
     content: |-
       {{
@@ -382,7 +386,7 @@
 
 - name: Write registration tag update debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_tag_update.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ resolved_endpoint | replace('/', '_') }}_tag_update.json"
     mode: "0600"
     content: "{{ {'registration_tag_update_result': (registration_tag_update_result | default({}))} | to_nice_json }}"
   when:
@@ -393,8 +397,8 @@
 - name: Record SaaS claim result
   ansible.builtin.set_fact:
     claim_result:
-      endpoint: "{{ endpoint | default(inventory_hostname) }}"
-      canonical_endpoint: "{{ endpoint | default(inventory_hostname) }}"
+      endpoint: "{{ resolved_endpoint }}"
+      canonical_endpoint: "{{ resolved_endpoint }}"
       organization: "{{ organization | default('') }}"
       device_type: "{{ target_claim_context.device_type | default('unknown') }}"
       normalized_claim_key: "{{ normalized_claim_key | default('') }}"
@@ -462,7 +466,7 @@
 
 - name: Write final per-endpoint claim result debug artifact
   ansible.builtin.copy:
-    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ (endpoint | default(inventory_hostname)) | replace('/', '_') }}_claim_result.json"
+    dest: "{{ role_debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}/{{ resolved_endpoint | replace('/', '_') }}_claim_result.json"
     mode: "0600"
     content: "{{ claim_result | to_nice_json }}"
   when:
