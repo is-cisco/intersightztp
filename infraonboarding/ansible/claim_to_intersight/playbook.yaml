@@ -1,0 +1,226 @@
+---
+- name: Build dynamic inventory for SaaS claim
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    generated_inventory_input: "{{ generated_inventory_json | default('{}') }}"
+    generated_inventory_payload: >-
+      {{
+        generated_inventory_input
+        if (generated_inventory_input is not string)
+        else (
+          (generated_inventory_input | from_yaml)
+          if (generated_inventory_input | string | trim | length) > 0
+          else {}
+        )
+      }}
+    endpoint_host_items: >-
+      {{
+        generated_inventory_payload.all.children.endpoints.hosts
+        | default({})
+        | dict2items
+      }}
+    inventory_organization: "{{ generated_inventory_payload.all.vars.organization | default('') }}"
+    inventory_desired_credentials: "{{ generated_inventory_payload.all.vars.desired_credentials | default([]) }}"
+    prepared_endpoint_items_input: "{{ prepared_endpoints_json | default('[]') }}"
+    prepared_endpoint_items: >-
+      {{
+        prepared_endpoint_items_input
+        if (prepared_endpoint_items_input is not string)
+        else (
+          (prepared_endpoint_items_input | from_yaml)
+          if (prepared_endpoint_items_input | string | trim | length) > 0
+          else []
+        )
+      }}
+    claim_intersight_validate_certs: "{{ validate_certs | default(false) | bool }}"
+    claim_api_uri: "{{ api_uri | default('https://intersight.com/api/v1') }}"
+    internal_deployment_name: "{{ deployment_name | default('') }}"
+    internal_organization: "{{ organization | default(inventory_organization, true) }}"
+    internal_debug_enabled: "{{ debug_enabled | default('false') }}"
+    claim_api_key_id: "{{ api_key_id | default('') }}"
+    claim_api_private_key: "{{ api_private_key | default('') }}"
+    claim_endpoint_validate_certs: "{{ endpoint_validate_certs | default(validate_certs | default(false)) | bool }}"
+    internal_helper_timeout_seconds: "{{ helper_timeout_seconds | default(20) }}"
+    debug_artifact_dir: "/tmp/endpoint_onboarding-debug/claim_to_intersight"
+  pre_tasks:
+    - name: Install shared Python requirements
+      ansible.builtin.pip:
+        requirements: "{{ playbook_dir }}/../requirements.txt"
+      tags:
+        - always
+        - precheck
+
+    - name: Validate generated inventory and prepared endpoint contract
+      ansible.builtin.assert:
+        that:
+          - generated_inventory_json is defined
+          - generated_inventory_payload | type_debug == 'dict'
+          - endpoint_host_items | type_debug == 'list'
+          - prepared_endpoint_items | type_debug == 'list'
+          - (internal_helper_timeout_seconds | int) > 0
+        fail_msg: "generated_inventory_json and prepared_endpoints_json must decode to valid endpoint lists, and helper_timeout_seconds must be positive"
+      tags:
+        - always
+        - validate
+        - precheck
+
+    - name: Validate Intersight authentication inputs
+      ansible.builtin.assert:
+        that:
+          - api_key_id is defined
+          - api_key_id | string | trim | length > 0
+          - api_private_key is defined
+          - api_private_key | string | trim | length > 0
+        fail_msg: "api_key_id and api_private_key are required for claim submission"
+      when: (prepared_endpoint_items | select('mapping') | list | length) > 0
+      no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+      tags:
+        - always
+        - validate
+        - precheck
+  tasks:
+    - name: Initialize claim aggregate outputs
+      ansible.builtin.set_fact:
+        claim_results: []
+        successful_result_items: []
+        failed_result_items: []
+        conflict_result_items: []
+        skipped_result_items: []
+        changed_result_items: []
+        seen_claim_target_map: {}
+      tags:
+        - always
+        - outputs
+
+    - name: Add generated endpoints to dynamic SaaS claim group
+      ansible.builtin.add_host:
+        name: "{{ endpoint_item.key }}"
+        groups: saas_claim_targets
+        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.key) }}"
+      loop: "{{ endpoint_host_items }}"
+      loop_control:
+        loop_var: endpoint_item
+        label: "{{ endpoint_item.value.endpoint | default(endpoint_item.key) }}"
+      tags:
+        - configure
+        - claim
+        - verify
+        - aggregate
+
+- name: Claim to Intersight per endpoint
+  hosts: saas_claim_targets
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  vars:
+    inventory_desired_credentials: "{{ hostvars['localhost'].inventory_desired_credentials | default([]) }}"
+    prepared_endpoint_items: "{{ hostvars['localhost'].prepared_endpoint_items | default([]) }}"
+    internal_deployment_name: "{{ hostvars['localhost'].internal_deployment_name | default('') }}"
+    internal_organization: "{{ hostvars['localhost'].internal_organization | default('') }}"
+    internal_debug_enabled: "{{ hostvars['localhost'].internal_debug_enabled | default('false') }}"
+    claim_api_key_id: "{{ hostvars['localhost'].claim_api_key_id | default('') }}"
+    claim_api_private_key: "{{ hostvars['localhost'].claim_api_private_key | default('') }}"
+    claim_api_uri: "{{ hostvars['localhost'].claim_api_uri | default('https://intersight.com/api/v1') }}"
+    claim_intersight_validate_certs: "{{ hostvars['localhost'].claim_intersight_validate_certs | default(false) | bool }}"
+    claim_endpoint_validate_certs: "{{ hostvars['localhost'].claim_endpoint_validate_certs | default(false) | bool }}"
+    internal_helper_timeout_seconds: "{{ hostvars['localhost'].internal_helper_timeout_seconds | default(20) }}"
+    debug_artifact_dir: "{{ hostvars['localhost'].debug_artifact_dir | default('/tmp/endpoint_onboarding-debug/claim_to_intersight') }}"
+  tasks:
+    - name: Run SaaS claim for current endpoint
+      ansible.builtin.include_tasks: tasks/process_endpoint.yml
+      tags:
+        - configure
+        - claim
+        - verify
+        - aggregate
+
+- name: Aggregate SaaS claim outputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Export claim aggregate contract
+      ansible.builtin.set_fact:
+        batch_status: "{{ 'failed' if (failed_result_items | length) > 0 else 'successful' }}"
+        successful_endpoints: "{{ successful_result_items | length | string }}"
+        failed_endpoints: "{{ failed_result_items | length | string }}"
+        conflict_endpoints: "{{ conflict_result_items | length | string }}"
+        skipped_endpoints: "{{ skipped_result_items | length | string }}"
+        changed_endpoints: "{{ changed_result_items | length | string }}"
+        non_intersight_managed_targets: "0"
+        results_json: "{{ claim_results | to_json }}"
+      tags:
+        - outputs
+        - aggregate
+
+    - name: Ensure claim debug artifact directory exists
+      ansible.builtin.file:
+        path: "{{ debug_artifact_dir }}"
+        state: directory
+        mode: "0700"
+      when: debug_enabled | default('false') | bool
+      tags:
+        - always
+        - debug
+        - precheck
+
+    - name: Write claim aggregate debug artifact
+      ansible.builtin.copy:
+        dest: "{{ debug_artifact_dir }}/claim_debug.json"
+        mode: "0600"
+        content: |-
+          {{
+            {
+              'results': (results_json | from_yaml),
+              'successful_result_items': successful_result_items,
+              'failed_result_items': failed_result_items,
+              'conflict_result_items': conflict_result_items,
+              'skipped_result_items': skipped_result_items,
+              'changed_result_items': changed_result_items
+            } | to_nice_json
+          }}
+      when: debug_enabled | default('false') | bool
+      tags:
+        - always
+        - debug
+        - outputs
+
+    - name: Validate claim aggregate outputs
+      ansible.builtin.assert:
+        that:
+          - batch_status is defined
+          - successful_endpoints is defined
+          - failed_endpoints is defined
+          - conflict_endpoints is defined
+          - skipped_endpoints is defined
+          - changed_endpoints is defined
+          - non_intersight_managed_targets is defined
+          - results_json is defined
+          - results_json | string | trim | length > 0
+        fail_msg: "claim_to_intersight did not produce the expected aggregate outputs"
+      tags:
+        - always
+        - verify
+
+    - name: Export Torque outputs
+      torque.collections.export_torque_outputs:
+        outputs:
+          batch_status: "{{ batch_status }}"
+          successful_endpoints: "{{ successful_endpoints }}"
+          failed_endpoints: "{{ failed_endpoints }}"
+          conflict_endpoints: "{{ conflict_endpoints }}"
+          non_intersight_managed_targets: "{{ non_intersight_managed_targets }}"
+          skipped_endpoints: "{{ skipped_endpoints }}"
+          changed_endpoints: "{{ changed_endpoints }}"
+          results_json: "{{ results_json }}"
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+      tags:
+        - always
+        - outputs

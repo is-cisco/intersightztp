@@ -1,0 +1,32 @@
+---
+- name: Teardown check and reset default password
+  hosts: "{{ group | default('localhost') }}"
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Report no-op teardown behavior
+      ansible.builtin.set_fact:
+        destroy_status: successful
+        destroy_results_json: >-
+          {{ [ {
+            'status': 'skipped',
+            'reason': 'noop_destroy_behavior',
+            'messages': ['check_and_reset_default_password has no destroy-time cleanup']
+          } ] | to_json }}
+      tags:
+        - always
+        - teardown
+        - outputs
+
+    - name: Export Torque outputs
+      torque.collections.export_torque_outputs:
+        outputs:
+          destroy_status: "{{ destroy_status }}"
+          destroy_results_json: "{{ destroy_results_json }}"
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+      tags:
+        - always
+        - outputs

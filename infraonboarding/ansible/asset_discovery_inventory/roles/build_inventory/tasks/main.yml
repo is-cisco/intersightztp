@@ -1,0 +1,25 @@
+---
+- name: Build generated inventory payload
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/tools/run_build_inventory.py"
+  environment:
+    ENDPOINTS_JSON: "{{ (endpoints_json | default('[]') | from_yaml) | to_json }}"
+    CREDENTIALS_JSON: "{{ (desired_credentials_json | default('[]') | from_yaml) | to_json }}"
+    DEFAULT_CREDENTIALS_JSON: "{{ (factory_credentials_json | default('[]') | from_yaml) | to_json }}"
+    LOCATION: "{{ location | default('') }}"
+    ORGANIZATION: "{{ organization | default('') }}"
+  register: generated_inventory_result
+  changed_when: false
+  no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+
+- name: Parse generated inventory payload
+  ansible.builtin.set_fact:
+    generated_inventory_payload: "{{ generated_inventory_result.stdout | from_json }}"
+
+- name: Export generated inventory contract
+  ansible.builtin.set_fact:
+    generated_inventory_yaml: "{{ generated_inventory_payload.generated_inventory_yaml }}"
+    generated_inventory_json: "{{ '' ~ generated_inventory_payload.generated_inventory_json_string }}"
+    generated_inventory_endpoints_json: "{{ generated_inventory_payload.generated_inventory_endpoints | to_json }}"

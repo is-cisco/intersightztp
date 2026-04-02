@@ -1,0 +1,96 @@
+---
+- name: Find workflow summary for claim result
+  ansible.builtin.set_fact:
+    matching_workflow_result: >-
+      {{
+        (
+          workflow_result_items
+          | selectattr('endpoint', 'equalto', result_item.endpoint)
+          | list
+          | first
+        )
+        | default({}, true)
+      }}
+
+- name: Find DeviceClaims summary for claim result
+  ansible.builtin.set_fact:
+    matching_device_claim_result: >-
+      {{
+        (
+          device_claim_result_items
+          | default([])
+          | selectattr('endpoint', 'equalto', result_item.endpoint)
+          | list
+          | first
+        )
+        | default({}, true)
+      }}
+
+- name: Append enriched appliance claim result
+  ansible.builtin.set_fact:
+    enriched_claim_results: "{{ enriched_claim_results + [enriched_result] }}"
+  vars:
+    latest_device_claim_status: "{{ matching_device_claim_result.latest_device_claim_status | default('') }}"
+    latest_workflow_status: "{{ matching_workflow_result.latest_workflow_status | default('') }}"
+    claim_aware_status: >-
+      {%- if (latest_device_claim_status | string | lower) in ['started', 'completed'] -%}
+      {{ result_item.status }}
+      {%- elif (latest_device_claim_status | string | lower) in ['failed', 'error'] -%}
+      failed
+      {%- elif (latest_workflow_status | string | upper) in ['RUNNING', 'INPROGRESS', 'IN_PROGRESS', 'COMPLETED', 'SUCCESS', 'SUCCEEDED'] -%}
+      {{ result_item.status }}
+      {%- elif (latest_workflow_status | string | upper) in ['FAILED', 'FAILURE', 'ERROR', 'CANCELED', 'CANCELLED'] -%}
+      failed
+      {%- else -%}
+      {{ result_item.status }}
+      {%- endif -%}
+    claim_aware_reason: >-
+      {%- if (latest_device_claim_status | string | lower) in ['started', 'completed'] -%}
+      {{ result_item.reason | default('') }}
+      {%- elif (latest_device_claim_status | string | lower) in ['failed', 'error'] -%}
+      device_claim_failed
+      {%- elif (latest_workflow_status | string | upper) in ['RUNNING', 'INPROGRESS', 'IN_PROGRESS', 'COMPLETED', 'SUCCESS', 'SUCCEEDED'] -%}
+      {{ result_item.reason | default('') }}
+      {%- elif (latest_workflow_status | string | upper) in ['FAILED', 'FAILURE', 'ERROR', 'CANCELED', 'CANCELLED'] -%}
+      workflow_failed
+      {%- else -%}
+      {{ result_item.reason | default('') }}
+      {%- endif -%}
+    enriched_result: >-
+      {{
+        result_item
+        | combine(
+            {
+              'status': claim_aware_status,
+              'reason': claim_aware_reason,
+              'device_claim_found': matching_device_claim_result.device_claim_found | default(false),
+              'device_claim_count': matching_device_claim_result.device_claim_count | default(0),
+              'latest_device_claim_moid': matching_device_claim_result.latest_device_claim_moid | default(''),
+              'latest_device_claim_status': matching_device_claim_result.latest_device_claim_status | default(''),
+              'latest_device_claim_create_time': matching_device_claim_result.latest_device_claim_create_time | default(''),
+              'latest_device_claim_mod_time': matching_device_claim_result.latest_device_claim_mod_time | default(''),
+              'latest_device_claim_device_id': matching_device_claim_result.latest_device_claim_device_id | default(''),
+              'latest_device_claim_platform_type': matching_device_claim_result.latest_device_claim_platform_type | default(''),
+              'latest_device_claim_message': matching_device_claim_result.latest_device_claim_message | default(''),
+              'device_claim_reason': (
+                'device_claim_' ~ ((matching_device_claim_result.latest_device_claim_status | default('') | lower) | regex_replace('[^a-z0-9]+', '_') | regex_replace('^_|_$', ''))
+                if (matching_device_claim_result.latest_device_claim_status | default('') | string | trim | length) > 0
+                else ''
+              ),
+              'workflow_found': matching_workflow_result.workflow_found | default(false),
+              'workflow_count': matching_workflow_result.workflow_count | default(0),
+              'latest_workflow_moid': matching_workflow_result.latest_workflow_moid | default(''),
+              'latest_workflow_name': matching_workflow_result.latest_workflow_name | default(''),
+              'latest_workflow_status': matching_workflow_result.latest_workflow_status | default(''),
+              'latest_workflow_progress': matching_workflow_result.latest_workflow_progress | default(0),
+              'latest_workflow_create_time': matching_workflow_result.latest_workflow_create_time | default(''),
+              'latest_workflow_end_time': matching_workflow_result.latest_workflow_end_time | default(''),
+              'workflow_reason': (
+                'workflow_' ~ ((matching_workflow_result.latest_workflow_status | default('') | lower) | regex_replace('[^a-z0-9]+', '_') | regex_replace('^_|_$', ''))
+                if (matching_workflow_result.latest_workflow_status | default('') | string | trim | length) > 0
+                else ''
+              )
+            },
+            recursive=True
+          )
+      }}

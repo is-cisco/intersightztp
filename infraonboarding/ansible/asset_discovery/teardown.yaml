@@ -1,0 +1,15 @@
+---
+- name: Asset discovery teardown
+  hosts: "{{ group | default('localhost') }}"
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Export conservative no-op discovery teardown result
+      torque.collections.export_torque_outputs:
+        outputs:
+          destroy_status: skipped
+          destroy_results_json: '[{"status":"skipped","reason":"noop_destroy_behavior","messages":["asset_discovery teardown is a no-op"]}]'
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true

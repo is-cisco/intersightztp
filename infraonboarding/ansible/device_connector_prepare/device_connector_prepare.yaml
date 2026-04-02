@@ -1,0 +1,176 @@
+---
+- name: Build dynamic inventory for connector preparation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    generated_inventory_input: "{{ generated_inventory_json | default('{}') }}"
+    generated_inventory_payload: >-
+      {{
+        generated_inventory_input
+        if (generated_inventory_input is not string)
+        else (
+          (generated_inventory_input | from_yaml)
+          if (generated_inventory_input | string | trim | length) > 0
+          else {}
+        )
+      }}
+    endpoint_host_items: >-
+      {{
+        generated_inventory_payload.all.children.endpoints.hosts
+        | default({})
+        | dict2items
+      }}
+    password_stage_ready_endpoints_input: "{{ password_reset_ready_endpoints_json | default('[]') }}"
+    password_stage_ready_endpoints: "{{ password_stage_ready_endpoints_input if (password_stage_ready_endpoints_input is not string) else ((password_stage_ready_endpoints_input | from_yaml) if (password_stage_ready_endpoints_input | string | length > 0) else []) }}"
+    inventory_desired_credentials: "{{ generated_inventory_payload.all.vars.desired_credentials | default([]) }}"
+    internal_debug_enabled: "{{ debug_enabled | default('false') }}"
+    internal_helper_timeout_seconds: 20
+    debug_artifact_dir: "/tmp/endpoint_onboarding-debug/device_connector_prepare"
+  pre_tasks:
+    - name: Validate generated inventory and password reset contract
+      ansible.builtin.assert:
+        that:
+          - generated_inventory_json is defined
+          - generated_inventory_payload | type_debug == 'dict'
+          - endpoint_host_items | type_debug == 'list'
+          - password_stage_ready_endpoints | type_debug == 'list'
+        fail_msg: "generated_inventory_json and password_reset_ready_endpoints_json must decode to valid endpoint lists"
+      tags:
+        - always
+        - validate
+        - precheck
+  tasks:
+    - name: Add generated endpoints to dynamic connector preparation group
+      ansible.builtin.add_host:
+        name: "{{ endpoint_item.key }}"
+        groups: connector_prepare_targets
+        endpoint: "{{ endpoint_item.value.endpoint | default(endpoint_item.key) }}"
+      loop: "{{ endpoint_host_items }}"
+      loop_control:
+        loop_var: endpoint_item
+        label: "{{ endpoint_item.value.endpoint | default(endpoint_item.key) }}"
+      tags:
+        - validate
+        - prepare
+        - verify
+        - aggregate
+
+- name: Prepare device connector per endpoint
+  hosts: connector_prepare_targets
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    generated_inventory_input: "{{ generated_inventory_json | default('{}') }}"
+    generated_inventory_payload: >-
+      {{
+        generated_inventory_input
+        if (generated_inventory_input is not string)
+        else (
+          (generated_inventory_input | from_yaml)
+          if (generated_inventory_input | string | trim | length) > 0
+          else {}
+        )
+      }}
+    password_stage_ready_endpoints_input: "{{ password_reset_ready_endpoints_json | default('[]') }}"
+    password_stage_ready_endpoints: "{{ password_stage_ready_endpoints_input if (password_stage_ready_endpoints_input is not string) else ((password_stage_ready_endpoints_input | from_yaml) if (password_stage_ready_endpoints_input | string | trim | length) > 0 else []) }}"
+    inventory_desired_credentials: "{{ generated_inventory_payload.all.vars.desired_credentials | default([]) }}"
+    internal_debug_enabled: "{{ debug_enabled | default('false') }}"
+    internal_helper_timeout_seconds: 20
+    debug_artifact_dir: "/tmp/endpoint_onboarding-debug/device_connector_prepare"
+  tasks:
+    - name: Run connector preparation for current endpoint
+      ansible.builtin.include_tasks: tasks/process_endpoint.yml
+      tags:
+        - validate
+        - prepare
+        - verify
+        - aggregate
+
+- name: Aggregate connector preparation outputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    connector_prepare_target_hosts: "{{ groups['connector_prepare_targets'] | default([]) }}"
+    connector_prep_results: >-
+      {{
+        connector_prepare_target_hosts
+        | map('extract', hostvars, 'host_connector_prep_result')
+        | reject('equalto', None)
+        | reject('equalto', {})
+        | list
+      }}
+    prepared_endpoints: >-
+      {{
+        connector_prepare_target_hosts
+        | map('extract', hostvars, 'host_prepared_target_result')
+        | reject('equalto', None)
+        | reject('equalto', {})
+        | list
+      }}
+    debug_artifact_dir: "/tmp/endpoint_onboarding-debug/device_connector_prepare"
+  tasks:
+
+    - name: Export connector preparation aggregate contract
+      ansible.builtin.set_fact:
+        connector_prep_results_json: "{{ connector_prep_results | to_json }}"
+        prepared_endpoints_json: "{{ prepared_endpoints | to_json }}"
+      tags:
+        - outputs
+        - aggregate
+
+    - name: Ensure connector preparation debug artifact directory exists
+      ansible.builtin.file:
+        path: "{{ debug_artifact_dir }}"
+        state: directory
+        mode: "0700"
+      when: debug_enabled | default('false') | bool
+      tags:
+        - always
+        - debug
+        - precheck
+
+    - name: Write connector preparation debug artifact
+      ansible.builtin.copy:
+        dest: "{{ debug_artifact_dir }}/connector_prepare_debug.json"
+        mode: "0600"
+        content: |-
+          {{
+            {
+              'connector_prep_results': (connector_prep_results_json | from_yaml),
+              'prepared_endpoints': (prepared_endpoints_json | from_yaml)
+            } | to_nice_json
+          }}
+      when: debug_enabled | default('false') | bool
+      tags:
+        - always
+        - debug
+        - outputs
+
+    - name: Validate connector preparation aggregate outputs
+      ansible.builtin.assert:
+        that:
+          - connector_prep_results_json is defined
+          - prepared_endpoints_json is defined
+          - connector_prep_results_json | string | trim | length > 0
+          - prepared_endpoints_json | string | trim | length > 0
+        fail_msg: "device_connector_prepare did not produce the expected aggregate outputs"
+      tags:
+        - always
+        - verify
+
+    - name: Export Torque outputs
+      torque.collections.export_torque_outputs:
+        outputs:
+          connector_prep_results_json: "{{ connector_prep_results_json }}"
+          prepared_endpoints_json: "{{ prepared_endpoints_json }}"
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+      tags:
+        - always
+        - outputs

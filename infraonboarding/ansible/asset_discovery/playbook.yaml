@@ -1,0 +1,309 @@
+---
+- name: Discover assets
+  hosts: "{{ group | default('localhost') }}"
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    internal_endpoints_json: "{{ endpoints_json | default('[]') }}"
+    internal_credentials_json: "{{ desired_credentials_json | default('[]') }}"
+    internal_default_credentials_json: "{{ factory_credentials_json | default('[]') }}"
+    internal_location: "{{ location | default('') }}"
+    internal_organization: "{{ organization | default('') }}"
+    internal_discovery_management_port: "{{ discovery_management_port | default(443) }}"
+    internal_discovery_connect_timeout_seconds: "{{ discovery_connect_timeout_seconds | default(3) }}"
+    internal_discovery_wait_for_timeout_seconds: "{{ discovery_wait_for_timeout_seconds | default(5) }}"
+    debug_artifact_dir: "/tmp/endpoint_onboarding-debug/asset_discovery"
+  pre_tasks:
+    - name: Validate asset discovery inputs
+      ansible.builtin.assert:
+        that:
+          - internal_endpoints_json | string | trim | length > 0
+          - internal_credentials_json | string | trim | length > 0
+        fail_msg: "endpoints_json and desired_credentials_json are required"
+      tags:
+        - always
+        - validate
+        - precheck
+
+    - name: Build generated inventory payload from launch inputs
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/../asset_discovery_inventory/tools/run_build_inventory.py"
+      environment:
+        ENDPOINTS_JSON: "{{ internal_endpoints_json }}"
+        CREDENTIALS_JSON: "{{ internal_credentials_json }}"
+        DEFAULT_CREDENTIALS_JSON: "{{ internal_default_credentials_json }}"
+        LOCATION: "{{ internal_location }}"
+        ORGANIZATION: "{{ internal_organization }}"
+      register: generated_inventory_result
+      changed_when: false
+      no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+      tags:
+        - always
+        - precheck
+        - validate
+
+    - name: Parse generated inventory payload
+      ansible.builtin.set_fact:
+        generated_inventory_payload: "{{ generated_inventory_result.stdout | from_json }}"
+        endpoint_host_items: >-
+          {{
+            (
+              generated_inventory_result.stdout
+              | from_json
+            ).generated_inventory_json.all.children.endpoints.hosts
+            | default({})
+            | dict2items
+          }}
+      tags:
+        - always
+        - precheck
+        - validate
+  tasks:
+    - name: Initialize asset discovery outputs
+      ansible.builtin.set_fact:
+        discovery_results: []
+        discovered_host_map: {}
+        discovered_endpoint_list: []
+      tags:
+        - always
+        - outputs
+
+    - name: Check endpoint TCP reachability on management port
+      ansible.builtin.wait_for:
+        host: "{{ item.value.endpoint | default(item.key) }}"
+        port: "{{ internal_discovery_management_port | int }}"
+        timeout: "{{ internal_discovery_wait_for_timeout_seconds | int }}"
+        connect_timeout: "{{ internal_discovery_connect_timeout_seconds | int }}"
+        state: started
+      loop: "{{ endpoint_host_items }}"
+      loop_control:
+        label: "{{ item.value.endpoint | default(item.key) }}"
+      register: reachability_probe_results
+      changed_when: false
+      ignore_errors: true
+      tags:
+        - validate
+        - precheck
+        - verify
+
+    - name: Build reachability checked targets
+      ansible.builtin.set_fact:
+        reachability_checked_targets: "{{ (reachability_checked_targets | default([])) + [reachability_target] }}"
+      vars:
+        reachability_target:
+          endpoint: "{{ item.item.value.endpoint | default(item.item.key) }}"
+          location: "{{ item.item.value.location | default('') }}"
+          source_entry_type: "{{ item.item.value.source_entry_type | default('single') }}"
+          reachable: "{{ not (item.failed | default(false)) }}"
+          reachability_reason: "{{ 'management_port_reachable' if not (item.failed | default(false)) else 'endpoint_unreachable' }}"
+          reachability_method: "tcp_443"
+          management_port: "{{ internal_discovery_management_port | int }}"
+      loop: "{{ reachability_probe_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.value.endpoint | default(item.item.key) }}"
+      tags:
+        - validate
+        - precheck
+        - verify
+
+    - name: Run discovery probe helper
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/tools/run_discovery_probe.py"
+      environment:
+        TARGETS_JSON: "{{ (reachability_checked_targets | default([])) | to_json }}"
+        CREDENTIALS_JSON: "{{ internal_credentials_json }}"
+        VALIDATE_CERTS: "{{ (validate_certs | default(false) | bool) | ternary('true', 'false') }}"
+        TIMEOUT: "{{ operation_timeout_seconds | default(20) | string }}"
+      register: discovery_probe_result
+      changed_when: false
+      no_log: "{{ not (debug_enabled | default('false') | bool) }}"
+      tags:
+        - validate
+        - verify
+
+    - name: Parse discovery probe results
+      ansible.builtin.set_fact:
+        detected_targets: "{{ discovery_probe_result.stdout | from_json }}"
+      tags:
+        - validate
+        - verify
+
+    - name: Collect asset discovery results
+      ansible.builtin.set_fact:
+        discovery_results: "{{ discovery_results + [discovery_result] }}"
+        discovered_host_map: "{{ discovered_host_map | combine({host_key: host_payload}) }}"
+        discovered_endpoint_list: "{{ discovered_endpoint_list + [endpoint_payload] }}"
+      vars:
+        endpoint_status: "{{ 'eligible' if (item.detection_status | default('')) == 'live_detected' else 'failed' }}"
+        host_key: "{{ (generated_inventory_payload.generated_inventory_json.all.children.endpoints.hosts | default({}) | dict2items | selectattr('value.endpoint', 'equalto', item.endpoint) | list | first).key }}"
+        host_payload: "{{ (generated_inventory_payload.generated_inventory_json.all.children.endpoints.hosts | default({}) | dict2items | selectattr('value.endpoint', 'equalto', item.endpoint) | list | first).value }}"
+        endpoint_payload:
+          endpoint: "{{ item.endpoint }}"
+          location: "{{ item.location | default('') }}"
+          source_entry_type: "{{ item.source_entry_type | default('single') }}"
+        discovery_result:
+          endpoint: "{{ endpoint_payload.endpoint }}"
+          device_type: "{{ item.device_type | default('undetermined') }}"
+          status: "{{ endpoint_status }}"
+          changed: false
+          reason: "{{ item.detection_reason | default(item.reachability_reason | default('unknown')) }}"
+          source_entry_type: "{{ endpoint_payload.source_entry_type }}"
+          location: "{{ endpoint_payload.location }}"
+          reachability_method: "{{ item.reachability_method | default('tcp_443') }}"
+          management_port: "{{ item.management_port | default(internal_discovery_management_port | int) }}"
+          detection_probe: "{{ item.detection_probe | default('none') }}"
+          messages:
+            - "{{ item.detection_reason | default('Endpoint accepted for downstream processing') }}"
+      loop: "{{ detected_targets | default([]) }}"
+      loop_control:
+        label: "{{ item.endpoint }}"
+      when: (item.detection_status | default('')) == 'live_detected'
+      tags:
+        - verify
+        - outputs
+
+    - name: Collect failed asset discovery results
+      ansible.builtin.set_fact:
+        discovery_results: "{{ discovery_results + [discovery_result] }}"
+      vars:
+        endpoint_payload:
+          endpoint: "{{ item.endpoint }}"
+          location: "{{ item.location | default('') }}"
+          source_entry_type: "{{ item.source_entry_type | default('single') }}"
+        discovery_result:
+          endpoint: "{{ endpoint_payload.endpoint }}"
+          device_type: "{{ item.device_type | default('undetermined') }}"
+          status: failed
+          changed: false
+          reason: "{{ item.detection_reason | default(item.reachability_reason | default('unknown')) }}"
+          source_entry_type: "{{ endpoint_payload.source_entry_type }}"
+          location: "{{ endpoint_payload.location }}"
+          reachability_method: "{{ item.reachability_method | default('tcp_443') }}"
+          management_port: "{{ item.management_port | default(internal_discovery_management_port | int) }}"
+          detection_probe: "{{ item.detection_probe | default('none') }}"
+          messages:
+            - "{{ item.detection_reason | default('Endpoint was not eligible for downstream processing') }}"
+      loop: "{{ detected_targets | default([]) }}"
+      loop_control:
+        label: "{{ item.endpoint }}"
+      when: (item.detection_status | default('')) != 'live_detected'
+      tags:
+        - verify
+        - outputs
+
+    - name: Build filtered discovery inventory contract
+      ansible.builtin.set_fact:
+        generated_inventory_json: >-
+          {{
+            generated_inventory_payload.generated_inventory_json
+            | combine(
+                {
+                  'all': {
+                    'children': {
+                      'endpoints': {
+                        'hosts': discovered_host_map
+                      }
+                    }
+                  }
+                },
+                recursive=True
+              )
+          }}
+        generated_inventory_yaml: >-
+          {{
+            '---\n'
+            ~ (
+              generated_inventory_payload.generated_inventory_json
+              | combine(
+                  {
+                    'all': {
+                      'children': {
+                        'endpoints': {
+                          'hosts': discovered_host_map
+                        }
+                      }
+                    }
+                  },
+                  recursive=True
+                )
+              | to_nice_yaml
+            )
+          }}
+        generated_inventory_endpoints_json: "{{ discovered_endpoint_list | to_json }}"
+        discovered_targets_json: "{{ discovered_endpoint_list | to_json }}"
+        discovery_results_json: "{{ discovery_results | to_json }}"
+        total_targets: "{{ endpoint_host_items | length | string }}"
+        discovered_targets: "{{ discovered_endpoint_list | length | string }}"
+        non_intersight_managed_targets: "0"
+        failed_targets: "{{ discovery_results | selectattr('status', 'equalto', 'failed') | list | length | string }}"
+      tags:
+        - outputs
+        - verify
+
+    - name: Ensure asset discovery debug artifact directory exists
+      ansible.builtin.file:
+        path: "{{ debug_artifact_dir }}"
+        state: directory
+        mode: "0700"
+      when: debug_enabled | default('false') | bool
+      tags:
+        - always
+        - debug
+
+    - name: Write asset discovery debug artifact
+      ansible.builtin.copy:
+        dest: "{{ debug_artifact_dir }}/asset_discovery_debug.json"
+        mode: "0600"
+        content: |-
+          {{
+            {
+              'discovery_results': (discovery_results_json | from_yaml),
+              'discovered_targets': (discovered_targets_json | from_yaml),
+              'generated_inventory_json': generated_inventory_json
+            } | to_nice_json
+          }}
+      when: debug_enabled | default('false') | bool
+      tags:
+        - always
+        - debug
+        - outputs
+  post_tasks:
+    - name: Validate asset discovery outputs
+      ansible.builtin.assert:
+        that:
+          - generated_inventory_json is defined
+          - generated_inventory_yaml is defined
+          - generated_inventory_endpoints_json is defined
+          - discovered_targets_json is defined
+          - discovery_results_json is defined
+          - total_targets is defined
+          - discovered_targets is defined
+          - failed_targets is defined
+        fail_msg: "asset_discovery did not produce the expected outputs"
+      tags:
+        - always
+        - verify
+
+    - name: Export Torque outputs
+      torque.collections.export_torque_outputs:
+        outputs:
+          generated_inventory_yaml: "{{ generated_inventory_yaml }}"
+          generated_inventory_json: "{{ generated_inventory_json | to_json }}"
+          generated_inventory_endpoints_json: "{{ generated_inventory_endpoints_json }}"
+          discovered_targets_json: "{{ discovered_targets_json }}"
+          discovery_results_json: "{{ discovery_results_json }}"
+          total_targets: "{{ total_targets }}"
+          discovered_targets: "{{ discovered_targets }}"
+          non_intersight_managed_targets: "{{ non_intersight_managed_targets }}"
+          failed_targets: "{{ failed_targets }}"
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+      tags:
+        - always
+        - outputs
