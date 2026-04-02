@@ -1,0 +1,7 @@
+---
+default_solution_intent: flexpod
+solution_intent_map:
+  default: flexpod
+  flexpod: flexpod
+  virtualization: virtualization_foundation
+  ai: ai_pod

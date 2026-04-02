@@ -1,0 +1,1387 @@
+---
+- name: Build Cisco Intersight network intent provisioning payload
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    api_info: &api_info
+      api_private_key: "{{ api_private_key }}"
+      api_key_id: "{{ api_key_id }}"
+      api_uri: "{{ api_uri | default(omit) }}"
+      validate_certs: "{{ validate_certs | default(omit) }}"
+      state: "{{ state | default(omit) }}"
+
+    customer_overrides: "{{ customer_overrides_json | default('{}', true) | from_json }}"
+    onboarding_context: "{{ onboarding_payload_json | default('{}', true) | from_json }}"
+
+  tasks:
+    - name: Validate network intent inputs
+      ansible.builtin.assert:
+        that:
+          - deployment_name | default('') | length > 0
+          - organization | default('') | length > 0
+        fail_msg: >-
+          Network intent provisioning requires deployment_name and
+          organization.
+      tags: [always, validate]
+
+    - name: Look up organization in Intersight during preflight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /organization/Organizations
+        query_params:
+          $filter: "Name eq '{{ organization }}'"
+      register: organization_lookup_result
+      tags: [always, validate]
+
+    - name: Validate organization exists in Intersight
+      ansible.builtin.assert:
+        that:
+          - organization_lookup_result.api_response.Moid is defined
+          - organization_lookup_result.api_response.Moid | length > 0
+        fail_msg: >-
+          Organization {{ organization }} does not exist in Intersight.
+          This workflow validates and uses an existing organization; it does
+          not create one.
+      tags: [always, validate]
+
+    - name: Load catalog default mapping
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../catalog/solution_intents/catalog-map.yaml"
+        name: catalog_map
+      tags: [always, validate, intent]
+
+    - name: Resolve network intent from explicit input, onboarding metadata, or catalog
+      ansible.builtin.set_fact:
+        catalog_default_intent: >-
+          {{
+            catalog_map.solution_intent_map[catalog_key]
+            | default(catalog_map.default_solution_intent)
+          }}
+        resolved_intent_name: >-
+          {{
+            solution_intent
+            | default(
+                customer_overrides.solution_intent
+                | default(
+                    onboarding_context.deferred_network_intent.requested_solution_intent
+                    | default(catalog_map.solution_intent_map[catalog_key]
+                    | default(catalog_map.default_solution_intent)),
+                    true
+                  ),
+                true
+              )
+          }}
+      vars:
+        catalog_key: >-
+          {{
+            catalog_solution_key
+            | default(
+                onboarding_context.deferred_network_intent.catalog_solution_key
+                | default('default'),
+                true
+              )
+          }}
+      tags: [always, validate, intent]
+
+    - name: Resolve intent catalog path
+      ansible.builtin.set_fact:
+        intent_catalog_path: >-
+          {{
+            playbook_dir
+            ~ '/../../catalog/solution_intents/'
+            ~ resolved_intent_name
+            ~ '.yaml'
+          }}
+      tags: [always, validate, intent]
+
+    - name: Check solution intent catalog exists
+      ansible.builtin.stat:
+        path: "{{ intent_catalog_path }}"
+      register: intent_catalog_file
+      tags: [always, validate, intent]
+
+    - name: Validate intent catalog exists
+      ansible.builtin.assert:
+        that:
+          - intent_catalog_file.stat.exists
+        fail_msg: >-
+          Solution intent {{ resolved_intent_name }} is not defined in
+          catalog/solution_intents.
+      tags: [always, validate, intent]
+
+    - name: Load solution intent definition
+      ansible.builtin.include_vars:
+        file: "{{ intent_catalog_path }}"
+        name: solution_intent_data
+      tags: [always, intent]
+
+    - name: Compose effective network intent settings
+      ansible.builtin.set_fact:
+        port_policy_name: "{{ deployment_name ~ '-Port-Policy' }}"
+        vlan_policy_name: "{{ deployment_name ~ '-VLAN-Policy' }}"
+        multicast_policy_name: "{{ deployment_name ~ '-Multicast-Policy' }}"
+        effective_vlans: >-
+          {{
+            customer_overrides.vlans
+            | default(solution_intent_data.vlans | default([]), true)
+          }}
+        effective_vlan_groups: >-
+          {{
+            customer_overrides.vlan_groups
+            | default(solution_intent_data.vlan_groups | default([]), true)
+          }}
+        effective_uplink_profiles: >-
+          {{
+            customer_overrides.uplink_profiles
+            | default(solution_intent_data.uplink_profiles | default([]), true)
+          }}
+        effective_global_settings: >-
+          {{
+            solution_intent_data.global_settings
+            | default({})
+            | combine(customer_overrides.global_settings | default({}), recursive=True)
+            | combine(
+                {
+                  'uplink_mode': (
+                    (
+                      customer_overrides.global_settings.uplink_mode
+                      if (
+                        customer_overrides.global_settings is defined
+                        and customer_overrides.global_settings.uplink_mode is defined
+                      )
+                      else solution_intent_data.global_settings.uplink_mode
+                      | default('standard')
+                    )
+                  ),
+                  'network_intent_mode': 'active',
+                  'policy_attachments': {
+                    'vlan_policy': deployment_name ~ '-VLAN-Policy',
+                    'multicast_policy': deployment_name ~ '-Multicast-Policy'
+                  }
+                },
+                recursive=True
+              )
+          }}
+        policy_prefix: "{{ deployment_name }}"
+      tags: [always, compose]
+
+    - name: Initialize uplink attachment context
+      ansible.builtin.set_fact:
+        payload_fi_model: "{{ onboarding_context.metadata.fi_model | default('') }}"
+        payload_uplink_ports: "{{ onboarding_context.port_configuration.ethernet_uplink_ports | default([]) }}"
+        payload_uplink_port_channels: "{{ onboarding_context.port_configuration.ethernet_uplink_port_channels | default([]) }}"
+        payload_server_ports: "{{ onboarding_context.port_configuration.server_ports | default([]) }}"
+        attachment_port_policy_name: "{{ port_policy_name }}"
+      tags: [always, compose]
+
+    - name: Look up onboarding port policy in Intersight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/PortPolicies
+        query_params:
+          $filter: "Name eq '{{ attachment_port_policy_name }}'"
+      register: attachment_port_policy_lookup
+      tags: [always, compose, attach]
+
+    - name: Look up onboarding uplink ports in Intersight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/UplinkRoles
+        return_list: true
+        query_params:
+          $filter: "PortPolicy.Moid eq '{{ attachment_port_policy_lookup.api_response.Moid }}'"
+      register: attachment_uplink_roles_lookup
+      when: attachment_port_policy_lookup.api_response.Moid is defined
+      tags: [always, compose, attach]
+
+    - name: Look up onboarding uplink port channels in Intersight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/UplinkPcRoles
+        return_list: true
+        query_params:
+          $filter: "PortPolicy.Moid eq '{{ attachment_port_policy_lookup.api_response.Moid }}'"
+      register: attachment_uplink_pc_roles_lookup
+      when: attachment_port_policy_lookup.api_response.Moid is defined
+      tags: [always, compose, attach]
+
+    - name: Look up onboarding server ports in Intersight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/ServerRoles
+        return_list: true
+        query_params:
+          $filter: "PortPolicy.Moid eq '{{ attachment_port_policy_lookup.api_response.Moid }}'"
+      register: attachment_server_roles_lookup
+      when: attachment_port_policy_lookup.api_response.Moid is defined
+      tags: [always, compose, attach]
+
+    - name: Compose uplink attachment context from Intersight or payload fallback
+      ansible.builtin.set_fact:
+        attachment_context_source: >-
+          {{
+            'intersight_port_policy'
+            if (attachment_port_policy_lookup.api_response.Moid is defined)
+            else (
+              'onboarding_payload'
+              if (
+                (payload_fi_model | length > 0)
+                or (payload_uplink_ports | length > 0)
+                or (payload_uplink_port_channels | length > 0)
+              )
+              else 'none'
+            )
+          }}
+        onboarding_fi_model: >-
+          {{
+            attachment_port_policy_lookup.api_response.DeviceModel
+            | default(payload_fi_model)
+          }}
+        onboarding_uplink_ports: >-
+          {{
+            (live_uplink_ports_json | from_json)
+            if (attachment_port_policy_lookup.api_response.Moid is defined)
+            else payload_uplink_ports
+          }}
+        onboarding_uplink_port_channels: >-
+          {{
+            (live_uplink_port_channels_json | from_json)
+            if (attachment_port_policy_lookup.api_response.Moid is defined)
+            else payload_uplink_port_channels
+          }}
+        onboarding_server_ports: >-
+          {{
+            (live_server_ports_json | from_json)
+            if (attachment_port_policy_lookup.api_response.Moid is defined)
+            else payload_server_ports
+          }}
+      vars:
+        live_uplink_role_items: >-
+          {{
+            (
+              attachment_uplink_roles_lookup.api_response.Results
+              if (
+                attachment_uplink_roles_lookup is defined
+                and attachment_uplink_roles_lookup.api_response is mapping
+                and attachment_uplink_roles_lookup.api_response.Results is defined
+              )
+              else (attachment_uplink_roles_lookup.api_response | default([]))
+            )
+          }}
+        live_uplink_pc_role_items: >-
+          {{
+            (
+              attachment_uplink_pc_roles_lookup.api_response.Results
+              if (
+                attachment_uplink_pc_roles_lookup is defined
+                and attachment_uplink_pc_roles_lookup.api_response is mapping
+                and attachment_uplink_pc_roles_lookup.api_response.Results is defined
+              )
+              else (attachment_uplink_pc_roles_lookup.api_response | default([]))
+            )
+          }}
+        live_server_role_items: >-
+          {{
+            (
+              attachment_server_roles_lookup.api_response.Results
+              if (
+                attachment_server_roles_lookup is defined
+                and attachment_server_roles_lookup.api_response is mapping
+                and attachment_server_roles_lookup.api_response.Results is defined
+              )
+              else (attachment_server_roles_lookup.api_response | default([]))
+            )
+          }}
+        live_uplink_ports_json: >-
+          {% set out = [] %}
+          {% for port in live_uplink_role_items | default([]) %}
+          {% set raw_port_id = (
+            (port.AggregatePortId | string) ~ '/' ~ (port.PortId | string)
+            if (port.AggregatePortId is defined and port.AggregatePortId | int > 0)
+            else (port.SlotId | default(1) | string) ~ '/' ~ (port.PortId | string)
+          ) %}
+          {% set _ = out.append({
+            'port_id': raw_port_id,
+            'admin_speed': port.AdminSpeed | default('Auto'),
+            'fec': port.Fec | default('Auto'),
+            'state': 'present'
+          }) %}
+          {% endfor %}
+          {{ out | to_json }}
+        live_uplink_port_channels_json: >-
+          {% set out = [] %}
+          {% for pc in live_uplink_pc_role_items | default([]) %}
+          {% set members = [] %}
+          {% for member in pc.Ports | default([]) %}
+          {% set member_port_id = (
+            (member.AggregatePortId | string) ~ '/' ~ (member.PortId | string)
+            if (member.AggregatePortId is defined and member.AggregatePortId | int > 0)
+            else (member.SlotId | default(1) | string) ~ '/' ~ (member.PortId | string)
+          ) %}
+          {% set _ = members.append(member_port_id) %}
+          {% endfor %}
+          {% set _ = out.append({
+            'name': pc.Name | default(pc.PcId | string),
+            'pc_id': pc.PcId | default(0),
+            'member_ports': members,
+            'admin_speed': pc.AdminSpeed | default('Auto'),
+            'fec': pc.Fec | default('Auto'),
+            'state': 'present'
+          }) %}
+          {% endfor %}
+          {{ out | to_json }}
+        live_server_ports_json: >-
+          {% set out = [] %}
+          {% for port in live_server_role_items | default([]) %}
+          {% set raw_port_id = (
+            (port.AggregatePortId | string) ~ '/' ~ (port.PortId | string)
+            if (port.AggregatePortId is defined and port.AggregatePortId | int > 0)
+            else (port.SlotId | default(1) | string) ~ '/' ~ (port.PortId | string)
+          ) %}
+          {% set _ = out.append({
+            'port_id': raw_port_id,
+            'fec': port.Fec | default('Auto'),
+            'state': 'present'
+          }) %}
+          {% endfor %}
+          {{ out | to_json }}
+      tags: [always, compose, attach]
+
+    - name: Validate VLAN IDs are unique
+      ansible.builtin.assert:
+        that:
+          - (effective_vlans | map(attribute='id') | list | length) == (effective_vlans | map(attribute='id') | list | unique | length)
+        fail_msg: "Solution intent contains duplicate VLAN IDs."
+      tags: [always, validate, intent]
+
+    - name: Validate VLAN group references exist in VLAN list
+      ansible.builtin.assert:
+        that:
+          - (item.vlans | difference(vlan_id_list)) | length == 0
+        fail_msg: >-
+          VLAN group {{ item.name }} references VLAN IDs that are not defined
+          in the effective VLAN list.
+      vars:
+        vlan_id_list: "{{ effective_vlans | map(attribute='id') | list }}"
+      loop: "{{ effective_vlan_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [always, validate, intent]
+
+    - name: Validate uplink profile VLAN groups exist
+      ansible.builtin.assert:
+        that:
+          - item.1 in (effective_vlan_groups | map(attribute='name') | list)
+        fail_msg: >-
+          Uplink profile {{ item.0.name | default('unnamed-profile') }} refers
+          to undefined VLAN group {{ item.1 }}.
+      loop: "{{ query('subelements', effective_uplink_profiles, 'vlan_groups', {'skip_missing': True}) }}"
+      loop_control:
+        label: "{{ item.0.name | default('unnamed-profile') }}:{{ item.1 }}"
+      when: effective_uplink_profiles | length > 0
+      tags: [always, validate, intent]
+
+    - name: Validate uplink profile native VLANs exist
+      ansible.builtin.assert:
+        that:
+          - item.native_vlan | int in (effective_vlans | map(attribute='id') | list)
+        fail_msg: >-
+          Uplink profile {{ item.name | default('unnamed-profile') }} refers
+          to native VLAN {{ item.native_vlan }} which is not defined.
+      loop: "{{ effective_uplink_profiles }}"
+      loop_control:
+        label: "{{ item.name | default('unnamed-profile') }}"
+      when:
+        - effective_uplink_profiles | length > 0
+        - item.native_vlan is defined
+      tags: [always, validate, intent]
+
+    - name: Validate named uplink port channel targets exist in onboarding context
+      ansible.builtin.assert:
+        that:
+          - (item.target_uplink_port_channel_names | difference(available_uplink_pc_names)) | length == 0
+        fail_msg: >-
+          Uplink profile {{ item.name | default('unnamed-profile') }} references
+          unknown uplink port channel names {{ item.target_uplink_port_channel_names | difference(available_uplink_pc_names) }}.
+          Valid onboarding uplink port channel names are {{ available_uplink_pc_names }}.
+      vars:
+        available_uplink_pc_names: "{{ onboarding_uplink_port_channels | map(attribute='name') | list }}"
+      loop: "{{ effective_uplink_profiles }}"
+      loop_control:
+        label: "{{ item.name | default('unnamed-profile') }}"
+      when:
+        - effective_uplink_profiles | length > 0
+        - item.target_uplink_port_channel_names is defined
+      tags: [always, validate, intent]
+
+    - name: Validate wildcard uplink intent is only used when discovery is unambiguous
+      ansible.builtin.assert:
+        that:
+          - (effective_uplink_profiles | length) == 1
+          - (onboarding_uplink_port_channels | length) <= 1
+        fail_msg: >-
+          Omitting target_ports is only supported when exactly one uplink
+          profile is defined and discovery shows at most one uplink port
+          channel. Add target_uplink_port_channel_names or target_ports for
+          disjoint uplink placement.
+      when:
+        - effective_uplink_profiles | length > 0
+        - >-
+          (
+            effective_uplink_profiles
+            | rejectattr('target_ports', 'defined')
+            | rejectattr('target_uplink_port_channel_names', 'defined')
+            | list
+            | length
+          ) > 0
+      tags: [always, validate, intent]
+
+    - name: Initialize expanded uplink profile structures
+      ansible.builtin.set_fact:
+        expanded_uplink_profiles: []
+      tags: [always, compose]
+
+    - name: Expand uplink profile target port ranges
+      ansible.builtin.set_fact:
+        expanded_uplink_profiles: "{{ expanded_uplink_profiles + [expanded_profile] }}"
+      vars:
+        expanded_target_ports_yaml: >-
+          {% set out = [] %}
+          {% for port_spec in item.target_ports | default([]) %}
+          {% if '-' in port_spec %}
+          {% set start_spec = port_spec.split('-')[0] %}
+          {% set end_spec = port_spec.split('-')[1] %}
+          {% set slot_id = start_spec.split('/')[0] %}
+          {% set start_port = start_spec.split('/')[1] | int %}
+          {% set end_port = end_spec.split('/')[1] | int %}
+          {% for port_num in range(start_port, end_port + 1) %}
+          {% set _ = out.append(slot_id ~ '/' ~ (port_num | string)) %}
+          {% endfor %}
+          {% else %}
+          {% set _ = out.append(port_spec) %}
+          {% endif %}
+          {% endfor %}
+          {{ out | to_yaml }}
+        expanded_profile: >-
+          {{
+            item
+            | combine(
+                {
+                  'expanded_target_ports': (expanded_target_ports_yaml | from_yaml),
+                  'target_uplink_port_channel_names': (item.target_uplink_port_channel_names | default([])),
+                  'match_all_discovered_uplinks': (
+                    ((item.target_ports | default([]) | length) == 0)
+                    and ((item.target_uplink_port_channel_names | default([]) | length) == 0)
+                  ),
+                  'eth_network_group_policy_names': (
+                    item.vlan_groups
+                    | default([])
+                    | map('regex_replace', '^', policy_prefix ~ '-')
+                    | list
+                  )
+                },
+                recursive=True
+              )
+          }}
+      loop: "{{ effective_uplink_profiles }}"
+      loop_control:
+        label: "{{ item.name | default('unnamed-profile') }}"
+      tags: [always, compose]
+
+    - name: Initialize derived network intent policy structures
+      ansible.builtin.set_fact:
+        vlan_policy_vlans: []
+        ethernet_network_group_policies: []
+        attachment_server_ports: []
+        attachment_ethernet_uplink_ports: []
+        attachment_ethernet_uplink_port_channels: []
+      tags: [always, compose]
+
+    - name: Build VLAN policy entries for Intersight
+      ansible.builtin.set_fact:
+        vlan_policy_vlans: "{{ vlan_policy_vlans + [vlan_entry] }}"
+      vars:
+        native_vlan_ids: >-
+          {{
+            effective_uplink_profiles
+            | selectattr('native_vlan', 'defined')
+            | map(attribute='native_vlan')
+            | map('int')
+            | list
+          }}
+        vlan_entry:
+          name: >-
+            {{
+              policy_prefix
+              ~ '_'
+              ~ (
+                item.name
+                | default(item.id | string)
+                | string
+                | regex_replace('[^A-Za-z0-9:_-]+', '_')
+              )
+            }}
+          prefix: "{{ policy_prefix }}"
+          vlan_id: "{{ item.id | string }}"
+          auto_allow_on_uplinks: >-
+            {{
+              (
+                true
+                if (item.native_vlan | default(false) | bool)
+                else (
+                  item.auto_allow_on_uplinks
+                  if (item.auto_allow_on_uplinks is defined)
+                  else (item.id | int in native_vlan_ids)
+                )
+              ) | bool
+            }}
+          is_native: "{{ item.native_vlan | default(false) | bool }}"
+          multicast_policy_name: >-
+            {{
+              item.multicast_policy_name
+              | default(effective_global_settings.policy_attachments.multicast_policy)
+            }}
+      loop: "{{ effective_vlans }}"
+      loop_control:
+        label: "{{ item.id }}:{{ item.name | default('unnamed') }}"
+      tags: [always, compose]
+
+    - name: Build Ethernet network group policy entries
+      ansible.builtin.set_fact:
+        ethernet_network_group_policies: "{{ ethernet_network_group_policies + [group_policy] }}"
+      vars:
+        native_vlan_candidates: >-
+          {{
+            effective_uplink_profiles
+            | selectattr('vlan_groups', 'defined')
+            | selectattr('vlan_groups', 'contains', item.name)
+            | map(attribute='native_vlan')
+            | list
+          }}
+        native_vlan_for_group: >-
+          {{
+            (native_vlan_candidates | first)
+            if (
+              (native_vlan_candidates | length > 0)
+              and ((native_vlan_candidates | first | int) in (item.vlans | map('int') | list))
+            )
+            else omit
+          }}
+        group_policy:
+          name: "{{ policy_prefix }}-{{ item.name }}"
+          description: "Ethernet network group for {{ item.name }}"
+          allowed_vlans: "{{ item.vlans | map('string') | join(',') }}"
+          native_vlan: "{{ native_vlan_for_group }}"
+      loop: "{{ effective_vlan_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [always, compose]
+
+    - name: Build network intent payload
+      ansible.builtin.set_fact:
+        network_intent_payload:
+          metadata:
+            workflow: network_intent_provisioning
+            organization: "{{ organization }}"
+            deployment_name: "{{ deployment_name }}"
+            solution_intent: "{{ resolved_intent_name }}"
+            source_catalog_file: "{{ intent_catalog_path }}"
+          onboarding_context:
+            deployment_name: "{{ onboarding_context.metadata.deployment_name | default(deployment_name) }}"
+            fi_model: "{{ onboarding_context.metadata.fi_model | default('') }}"
+            switch_cluster_profile_moid: "{{ onboarding_context.switch_cluster_profile_moid | default('') }}"
+          network_intent:
+            vlans: "{{ effective_vlans }}"
+            vlan_groups: "{{ effective_vlan_groups }}"
+            uplink_profiles: "{{ effective_uplink_profiles }}"
+            global_settings: "{{ effective_global_settings }}"
+          derived_policies:
+            vlan_policy_name: "{{ effective_global_settings.policy_attachments.vlan_policy }}"
+            multicast_policy_name: "{{ effective_global_settings.policy_attachments.multicast_policy }}"
+            vlan_policy_vlans: "{{ vlan_policy_vlans }}"
+            ethernet_network_group_policies: "{{ ethernet_network_group_policies }}"
+          uplink_attachment:
+            port_policy_name: "{{ attachment_port_policy_name }}"
+            available: "{{ (onboarding_fi_model | length > 0) | bool }}"
+            ethernet_uplink_ports: "{{ attachment_ethernet_uplink_ports }}"
+            ethernet_uplink_port_channels: "{{ attachment_ethernet_uplink_port_channels }}"
+          intersight_resource_plan:
+            - step: 1
+              resource_type: multicast_policy
+              module: cisco.intersight.intersight_multicast_policy
+              name: "{{ effective_global_settings.policy_attachments.multicast_policy }}"
+            - step: 2
+              resource_type: vlan_policy
+              module: cisco.intersight.intersight_vlan_policy
+              name: "{{ effective_global_settings.policy_attachments.vlan_policy }}"
+            - step: 3
+              resource_type: ethernet_network_group_policies
+              module: cisco.intersight.intersight_ethernet_network_group_policy
+              names: "{{ ethernet_network_group_policies | map(attribute='name') | list }}"
+            - step: 4
+              resource_type: uplink_attachment
+              module: cisco.intersight.intersight_port_policy
+              name: "{{ attachment_port_policy_name }}"
+              note: >-
+                Reconciles Ethernet uplink ports or port channels from the
+                onboarding payload and attaches Ethernet Network Group
+                policies when onboarding port context is available.
+            - step: 5
+              resource_type: switch_profile_policy_attachment
+              module: cisco.intersight.intersight_rest_api
+              names:
+                - "{{ deployment_name }}-A"
+                - "{{ deployment_name }}-B"
+              note: >-
+                Attaches the VLAN policy to both switch profiles so the
+                network intent policies are actually in use. Multicast is
+                associated per-VLAN within the VLAN policy.
+            - step: 6
+              resource_type: switch_profile_deploy
+              module: cisco.intersight.intersight_rest_api
+              names:
+                - "{{ deployment_name }}-A"
+                - "{{ deployment_name }}-B"
+              note: >-
+                Deploys pending switch profile changes by default so
+                network-intent updates are committed on the domain.
+      tags: [always, compose]
+
+    - name: Show effective network intent summary
+      ansible.builtin.debug:
+        msg:
+          resolved_intent_name: "{{ resolved_intent_name }}"
+          vlan_count: "{{ effective_vlans | length }}"
+          vlan_group_count: "{{ effective_vlan_groups | length }}"
+          uplink_profile_count: "{{ effective_uplink_profiles | length }}"
+          uplink_mode: "{{ effective_global_settings.uplink_mode }}"
+      tags: [always, summary]
+
+    - name: Show network intent execution mode
+      ansible.builtin.debug:
+        msg: >-
+          Network intent payload is assembled. Set create_network_intent=true
+          to create multicast, VLAN, Ethernet network group policies, and
+          uplink attachment when onboarding payload includes port context.
+      when: not (create_network_intent | default('false') | bool)
+      tags: [create]
+
+    - name: Create multicast policy in Intersight
+      cisco.intersight.intersight_multicast_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ effective_global_settings.policy_attachments.multicast_policy }}"
+        description: "Multicast policy for {{ deployment_name }} network intent"
+      when: create_network_intent | default('false') | bool
+      register: multicast_policy_result
+      tags: [create, policies]
+
+    - name: Create VLAN policy in Intersight
+      cisco.intersight.intersight_vlan_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ effective_global_settings.policy_attachments.vlan_policy }}"
+        description: "VLAN policy for {{ deployment_name }} network intent"
+      when: create_network_intent | default('false') | bool
+      register: vlan_policy_result
+      tags: [create, policies]
+
+    - name: Look up created VLAN and multicast policy objects by name
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: "{{ item.resource_path }}"
+        query_params:
+          $filter: "Name eq '{{ item.name }}'"
+      loop:
+        - key: vlan_policy
+          name: "{{ effective_global_settings.policy_attachments.vlan_policy }}"
+          resource_path: /fabric/EthNetworkPolicies
+        - key: multicast_policy
+          name: "{{ effective_global_settings.policy_attachments.multicast_policy }}"
+          resource_path: /fabric/MulticastPolicies
+      loop_control:
+        label: "{{ item.key }}"
+      when: create_network_intent | default('false') | bool
+      register: named_network_policy_lookup_results
+      tags: [create, policies]
+
+    - name: Validate named network policy lookups returned Moids
+      ansible.builtin.assert:
+        that:
+          - item.api_response.Moid is defined
+          - item.api_response.Moid | length > 0
+        fail_msg: >-
+          Network policy {{ item.item.name }} was not found after creation.
+      loop: "{{ named_network_policy_lookup_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      when: create_network_intent | default('false') | bool
+      tags: [create, policies]
+
+    - name: Capture network policy Moids for VLAN creation
+      ansible.builtin.set_fact:
+        vlan_policy_moid: >-
+          {{
+            named_network_policy_lookup_results.results
+            | default([])
+            | selectattr('item.key', 'equalto', 'vlan_policy')
+            | map(attribute='api_response')
+            | map(attribute='Moid')
+            | list
+            | first
+          }}
+        multicast_policy_moid: >-
+          {{
+            named_network_policy_lookup_results.results
+            | default([])
+            | selectattr('item.key', 'equalto', 'multicast_policy')
+            | map(attribute='api_response')
+            | map(attribute='Moid')
+            | list
+            | first
+          }}
+      when: create_network_intent | default('false') | bool
+      tags: [create, policies]
+
+    - name: Create named VLANs in Intersight
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/Vlans
+        query_params:
+          $filter: "Name eq '{{ item.name }}' and EthNetworkPolicy.Moid eq '{{ vlan_policy_moid }}'"
+        api_body: "{{ vlan_api_body }}"
+      loop: "{{ vlan_policy_vlans }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        vlan_api_body: >-
+          {{
+            {
+              'ClassId': 'fabric.Vlan',
+              'ObjectType': 'fabric.Vlan',
+              'Name': item.name,
+              'VlanId': (item.vlan_id | int),
+              'AutoAllowOnUplinks': (item.auto_allow_on_uplinks | bool),
+              'IsNative': (item.is_native | bool),
+              'SharingType': 'None',
+              'PrimaryVlanId': 0,
+              'EthNetworkPolicy': {
+                'ClassId': 'mo.MoRef',
+                'ObjectType': 'fabric.EthNetworkPolicy',
+                'Moid': vlan_policy_moid
+              },
+              'MulticastPolicy': {
+                'ClassId': 'mo.MoRef',
+                'ObjectType': 'fabric.MulticastPolicy',
+                'Moid': multicast_policy_moid
+              }
+            }
+          }}
+      when: create_network_intent | default('false') | bool
+      register: named_vlan_results
+      tags: [create, policies]
+
+    - name: Create Ethernet network group policies in Intersight
+      cisco.intersight.intersight_ethernet_network_group_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        allowed_vlans: "{{ item.allowed_vlans }}"
+        native_vlan: "{{ item.native_vlan | default(omit) }}"
+      loop: "{{ ethernet_network_group_policies }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - ethernet_network_group_policies | length > 0
+      register: ethernet_network_group_policy_results
+      tags: [create, policies]
+
+    - name: Build uplink port channel attachment entries
+      ansible.builtin.set_fact:
+        attachment_ethernet_uplink_port_channels: "{{ attachment_ethernet_uplink_port_channels + [attachment_pc] }}"
+      vars:
+        matched_group_policy_names: >-
+          {%- set matches = [] -%}
+          {%- for profile in expanded_uplink_profiles -%}
+          {%- if (
+                (
+                  item.name is defined
+                  and item.name in (profile.target_uplink_port_channel_names | default([]))
+                )
+                or
+                profile.match_all_discovered_uplinks | default(false)
+                or ((item.member_ports | default([]) | intersect(profile.expanded_target_ports | default([])) | length) > 0)
+              ) -%}
+          {%- for policy_name in profile.eth_network_group_policy_names | default([]) -%}
+          {%- if policy_name not in matches -%}
+          {%- set _ = matches.append(policy_name) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ matches }}
+        attachment_pc:
+          pc_id: "{{ item.pc_id | int }}"
+          admin_speed: "{{ item.admin_speed | default('Auto') }}"
+          fec: "{{ item.fec | default('Auto') }}"
+          ports: >-
+            {%- set out = [] -%}
+            {%- for port_id in item.member_ports | default([]) -%}
+            {%- set normalized_id = (
+              port_id.split('/')[1]
+              if (
+                (port_id is string)
+                and ((port_id | regex_findall('/')) | length == 1)
+              )
+              else port_id
+            ) -%}
+            {%- set _ = out.append({'port_id': normalized_id}) -%}
+            {%- endfor -%}
+            {{ out }}
+          eth_network_group_policy_names: "{{ matched_group_policy_names }}"
+          state: "{{ item.state | default('present') }}"
+      loop: "{{ onboarding_uplink_port_channels }}"
+      loop_control:
+        label: "{{ item.name | default(item.pc_id | string) }}"
+      when:
+        - onboarding_uplink_port_channels | length > 0
+        - onboarding_fi_model | length > 0
+      tags: [always, compose, attach]
+
+    - name: Normalize onboarding server ports for attachment reconciliation
+      ansible.builtin.set_fact:
+        attachment_server_ports: "{{ attachment_server_ports + [normalized_port] }}"
+      vars:
+        normalized_port: >-
+          {{
+            item
+            | combine(
+                {
+                  'port_id': (
+                    item.port_id.split('/')[1]
+                    if (
+                      (item.port_id is string)
+                      and ((item.port_id | regex_findall('/')) | length == 1)
+                    )
+                    else item.port_id
+                  )
+                },
+                recursive=True
+              )
+          }}
+      loop: "{{ onboarding_server_ports }}"
+      loop_control:
+        label: "{{ item.port_id }}"
+      when:
+        - onboarding_server_ports | length > 0
+        - onboarding_fi_model | length > 0
+      tags: [always, compose, attach]
+
+    - name: Build uplink port attachment entries
+      ansible.builtin.set_fact:
+        attachment_ethernet_uplink_ports: "{{ attachment_ethernet_uplink_ports + [attachment_port] }}"
+      vars:
+        matched_group_policy_names: >-
+          {%- set matches = [] -%}
+          {%- for profile in expanded_uplink_profiles -%}
+          {%- if (
+                profile.match_all_discovered_uplinks | default(false)
+                or item.port_id in (profile.expanded_target_ports | default([]))
+              ) -%}
+          {%- for policy_name in profile.eth_network_group_policy_names | default([]) -%}
+          {%- if policy_name not in matches -%}
+          {%- set _ = matches.append(policy_name) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ matches }}
+        attachment_port:
+          port_id: >-
+            {{
+              item.port_id.split('/')[1]
+              if (
+                (item.port_id is string)
+                and ((item.port_id | regex_findall('/')) | length == 1)
+              )
+              else item.port_id
+            }}
+          admin_speed: "{{ item.admin_speed | default('Auto') }}"
+          fec: "{{ item.fec | default('Auto') }}"
+          eth_network_group_policy_name: "{{ matched_group_policy_names }}"
+          state: "{{ item.state | default('present') }}"
+      loop: "{{ onboarding_uplink_ports }}"
+      loop_control:
+        label: "{{ item.port_id }}"
+      when:
+        - onboarding_uplink_ports | length > 0
+        - onboarding_fi_model | length > 0
+      tags: [always, compose, attach]
+
+    - name: Validate intent uplinks matched discovered onboarding uplinks
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              attachment_ethernet_uplink_ports
+              | selectattr('eth_network_group_policy_name', 'defined')
+              | rejectattr('eth_network_group_policy_name', 'equalto', [])
+              | list
+              | length
+            )
+            +
+            (
+              attachment_ethernet_uplink_port_channels
+              | selectattr('eth_network_group_policy_names', 'defined')
+              | rejectattr('eth_network_group_policy_names', 'equalto', [])
+              | list
+              | length
+            )
+            > 0
+        fail_msg: >-
+          Network intent provisioning resolved uplink intent, but none of the intent target ports
+          matched the discovered onboarding uplinks in {{ attachment_port_policy_name }}.
+          Update the solution intent target ports or onboard the expected uplinks
+          before applying network intent.
+      when:
+        - effective_uplink_profiles | length > 0
+        - attachment_context_source == 'intersight_port_policy'
+        - (onboarding_uplink_ports | length > 0) or (onboarding_uplink_port_channels | length > 0)
+      tags: [always, validate, attach]
+
+    - name: Refresh network intent payload with uplink attachment plan
+      ansible.builtin.set_fact:
+        network_intent_payload: >-
+          {{
+            network_intent_payload
+            | combine(
+                {
+                  'uplink_attachment': {
+                    'port_policy_name': attachment_port_policy_name,
+                    'available': ((onboarding_fi_model | length > 0) | bool),
+                    'ethernet_uplink_ports': attachment_ethernet_uplink_ports,
+                    'ethernet_uplink_port_channels': attachment_ethernet_uplink_port_channels
+                  }
+                },
+                recursive=True
+              )
+          }}
+      tags: [always, compose, attach]
+
+    - name: Attach Ethernet network groups to onboarded uplink constructs
+      cisco.intersight.intersight_port_policy:
+        <<: *api_info
+        organization: "{{ organization }}"
+        name: "{{ attachment_port_policy_name }}"
+        description: "Port policy for {{ deployment_name }} domain onboarding"
+        device_model: "{{ onboarding_fi_model }}"
+        ethernet_uplink_ports: "{{ attachment_ethernet_uplink_ports if (attachment_ethernet_uplink_ports | length > 0) else omit }}"
+        ethernet_uplink_port_channels: "{{ attachment_ethernet_uplink_port_channels if (attachment_ethernet_uplink_port_channels | length > 0) else omit }}"
+        server_ports: "{{ attachment_server_ports if (attachment_server_ports | length > 0) else omit }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - onboarding_fi_model | length > 0
+        - (attachment_ethernet_uplink_ports | length > 0) or (attachment_ethernet_uplink_port_channels | length > 0)
+      register: uplink_attachment_result
+      tags: [create, attach]
+
+    - name: Look up switch profiles for logical network intent attachment
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      when: create_network_intent | default('false') | bool
+      register: switch_profile_lookup_results
+      tags: [create, attach]
+
+    - name: Validate switch profiles exist for logical network intent attachment
+      ansible.builtin.assert:
+        that:
+          - item.api_response.Moid is defined
+          - item.api_response.Moid | length > 0
+        fail_msg: >-
+          Switch profile {{ deployment_name }}-{{ item.item }} was not found.
+          Domain onboarding must complete before network intent policy attachment.
+      loop: "{{ switch_profile_lookup_results.results | default([]) }}"
+      loop_control:
+        label: "{{ deployment_name }}-{{ item.item }}"
+      when: create_network_intent | default('false') | bool
+      tags: [create, attach]
+
+    - name: Wait for switch profiles to be idle before network intent updates
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      when: create_network_intent | default('false') | bool
+      register: pre_attach_switch_profile_status_results
+      until: >-
+        (
+          pre_attach_switch_profile_status_results.api_response.ConfigContext.ConfigState
+          in ['Associated', 'Pending-changes', 'Failed', 'Inconsistent']
+        )
+        and
+        (
+          pre_attach_switch_profile_status_results.api_response.RunningWorkflows
+          | default([])
+          | length
+        ) == 0
+      retries: "{{ switch_profile_wait_retries | default(20) }}"
+      delay: "{{ switch_profile_wait_delay | default(15) }}"
+      tags: [create, attach]
+
+    - name: Validate switch profiles are stable before network intent updates
+      ansible.builtin.assert:
+        that:
+          - item.api_response.ConfigContext.ConfigState | default('') not in ['Failed', 'Inconsistent']
+        fail_msg: >-
+          Switch profile {{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}
+          is already in a bad state before logical policy attachment.
+          Current ConfigState is {{ item.api_response.ConfigContext.ConfigState | default('unknown') }}.
+          Clear the existing profile issue before applying new logical policies.
+      loop: "{{ pre_attach_switch_profile_status_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}"
+      when: create_network_intent | default('false') | bool
+      tags: [create, attach]
+
+    - name: Refresh switch profiles after stability wait
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      when: create_network_intent | default('false') | bool
+      register: stable_switch_profile_lookup_results
+      tags: [create, attach]
+
+    - name: Build desired switch profile network policy attachments
+      ansible.builtin.set_fact:
+        desired_switch_network_policy_attachments: >-
+          {{
+            [
+              {
+                'ObjectType': 'fabric.EthNetworkPolicy',
+                'ClassId': 'mo.MoRef',
+                'Moid': vlan_policy_moid
+              }
+            ]
+          }}
+      when: create_network_intent | default('false') | bool
+      tags: [create, attach]
+
+    - name: Build missing network policy attachments per switch profile
+      ansible.builtin.set_fact:
+        switch_profile_network_policy_updates: "{{ (switch_profile_network_policy_updates | default([])) + [bucket_update] }}"
+      vars:
+        existing_attachment_moids: "{{ item.api_response.PolicyBucket | default([]) | map(attribute='Moid') | list }}"
+        missing_attachments: "{{ desired_switch_network_policy_attachments | rejectattr('Moid', 'in', existing_attachment_moids) | list }}"
+        bucket_update:
+          switch_profile_name: "{{ item.api_response.Name }}"
+          switch_profile_moid: "{{ item.api_response.Moid }}"
+          missing_attachments: "{{ missing_attachments }}"
+      loop: "{{ stable_switch_profile_lookup_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}"
+      when: create_network_intent | default('false') | bool
+      tags: [create, attach]
+
+    - name: Attach missing network policies to switch profiles
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: "/fabric/SwitchProfiles/{{ item.switch_profile_moid }}/PolicyBucket"
+        update_method: post
+        list_body: "{{ item.missing_attachments }}"
+      loop: "{{ switch_profile_network_policy_updates | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - item.missing_attachments | length > 0
+      register: switch_profile_network_policy_attach_results
+      tags: [create, attach]
+
+    - name: Refresh switch profile state after network intent updates
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      when: create_network_intent | default('false') | bool
+      register: final_switch_profile_lookup_results
+      tags: [create, deploy]
+
+    - name: Wait for switch profiles to be idle after network intent updates
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+      register: post_attach_switch_profile_status_results
+      until: >-
+        (
+          post_attach_switch_profile_status_results.api_response.RunningWorkflows | default([]) | length
+        ) == 0
+        and
+        (
+          post_attach_switch_profile_status_results.api_response.ConfigContext.ConfigState | default('')
+        ) in ['Associated', 'Pending-changes', 'Failed', 'Inconsistent']
+      retries: 20
+      delay: 15
+      tags: [create, deploy]
+
+    - name: Validate switch profiles are stable after network intent updates
+      ansible.builtin.assert:
+        that:
+          - item.api_response.ConfigContext.ConfigState | default('') not in ['Failed', 'Inconsistent']
+        fail_msg: >-
+          Switch profile {{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}
+          is not stable after network intent updates. Current ConfigState is
+          {{ item.api_response.ConfigContext.ConfigState | default('unknown') }}.
+      loop: "{{ post_attach_switch_profile_status_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+      tags: [create, deploy]
+
+    - name: Refresh switch profile state after post-attach settle
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ deployment_name }}-{{ item }}'"
+      loop:
+        - A
+        - B
+      loop_control:
+        label: "{{ deployment_name }}-{{ item }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+      register: deploy_candidate_switch_profile_lookup_results
+      tags: [create, deploy]
+
+    - name: Build switch profiles requiring deploy commit
+      ansible.builtin.set_fact:
+        switch_profiles_requiring_deploy: "{{ (switch_profiles_requiring_deploy | default([])) + [deploy_entry] }}"
+      vars:
+        deploy_entry:
+          switch_profile_name: "{{ item.api_response.Name }}"
+          switch_profile_moid: "{{ item.api_response.Moid }}"
+          switch_id: "{{ item.api_response.SwitchId }}"
+          assigned_switch_moid: "{{ item.api_response.AssignedSwitch.Moid | default('') }}"
+          config_state: "{{ item.api_response.ConfigContext.ConfigState | default('') }}"
+      loop: "{{ deploy_candidate_switch_profile_lookup_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+        - item.api_response.ConfigContext.ConfigState | default('') == 'Pending-changes'
+      tags: [create, deploy]
+
+    - name: Build switch profiles requiring deploy-state wait
+      ansible.builtin.set_fact:
+        switch_profiles_requiring_wait: "{{ (switch_profiles_requiring_wait | default([])) + [wait_entry] }}"
+      vars:
+        wait_entry:
+          switch_profile_name: "{{ item.api_response.Name }}"
+          switch_profile_moid: "{{ item.api_response.Moid }}"
+          switch_id: "{{ item.api_response.SwitchId }}"
+          assigned_switch_moid: "{{ item.api_response.AssignedSwitch.Moid | default('') }}"
+          config_state: "{{ item.api_response.ConfigContext.ConfigState | default('') }}"
+          running_workflow_count: "{{ item.api_response.RunningWorkflows | default([]) | length }}"
+      loop: "{{ deploy_candidate_switch_profile_lookup_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.api_response.Name | default(deployment_name ~ '-' ~ item.item) }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+        - >-
+          (
+            item.api_response.ConfigContext.ConfigState | default('')
+          ) in ['Pending-changes', 'Validating', 'Configuring']
+          or
+          (
+            item.api_response.RunningWorkflows | default([]) | length
+          ) > 0
+      tags: [create, deploy]
+
+    - name: Deploy switch profiles with pending network intent changes
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+        api_body:
+          Name: "{{ item.switch_profile_name }}"
+          ObjectType: fabric.SwitchProfile
+          ClassId: fabric.SwitchProfile
+          SwitchId: "{{ item.switch_id }}"
+          AssignedSwitch:
+            ObjectType: network.Element
+            ClassId: mo.MoRef
+            Moid: "{{ item.assigned_switch_moid }}"
+          Action: Deploy
+      loop: "{{ switch_profiles_requiring_deploy | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+      register: switch_profile_network_intent_deploy_results
+      tags: [create, deploy]
+
+    - name: Wait for switch profiles to reach a terminal deploy state after network intent updates
+      cisco.intersight.intersight_rest_api:
+        <<: *api_info
+        resource_path: /fabric/SwitchProfiles
+        query_params:
+          $filter: "Name eq '{{ item.switch_profile_name }}'"
+      loop: "{{ switch_profiles_requiring_wait | default([]) }}"
+      loop_control:
+        label: "{{ item.switch_profile_name }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+        - switch_profiles_requiring_wait | default([]) | length > 0
+      register: switch_profile_network_intent_deploy_wait_results
+      until: >-
+        (
+          switch_profile_network_intent_deploy_wait_results.api_response.ConfigContext.ConfigState
+          in ['Associated', 'Failed', 'Inconsistent']
+        )
+        and
+        (
+          switch_profile_network_intent_deploy_wait_results.api_response.RunningWorkflows
+          | default([])
+          | length
+        ) == 0
+      retries: "{{ switch_profile_wait_retries | default(20) }}"
+      delay: "{{ switch_profile_wait_delay | default(15) }}"
+      tags: [create, deploy]
+
+    - name: Validate deployed switch profiles reached Associated state
+      ansible.builtin.assert:
+        that:
+          - item.api_response.ConfigContext.ConfigState | default('') == 'Associated'
+          - (item.api_response.RunningWorkflows | default([]) | length) == 0
+        fail_msg: >-
+          Switch profile {{ item.item.switch_profile_name }} did not complete
+          deploy successfully. Final ConfigState was
+          {{ item.api_response.ConfigContext.ConfigState | default('unknown') }}
+          and RunningWorkflows length was
+          {{ item.api_response.RunningWorkflows | default([]) | length }}.
+      loop: "{{ switch_profile_network_intent_deploy_wait_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.switch_profile_name }}"
+      when:
+        - create_network_intent | default('false') | bool
+        - deploy_network_intent_changes | default('true') | bool
+        - switch_profiles_requiring_wait | default([]) | length > 0
+      tags: [create, deploy]
+
+    - name: Build network intent TAC handoff
+      ansible.builtin.set_fact:
+        network_intent_tac_handoff:
+          deployment_name: "{{ deployment_name }}"
+          organization: "{{ organization }}"
+          solution_intent: "{{ resolved_intent_name }}"
+          vlan_policy_name: "{{ effective_global_settings.policy_attachments.vlan_policy }}"
+          multicast_policy_name: "{{ effective_global_settings.policy_attachments.multicast_policy }}"
+          ethernet_network_group_policy_names: "{{ ethernet_network_group_policies | map(attribute='name') | list }}"
+          uplink_attachment:
+            port_policy_name: "{{ attachment_port_policy_name }}"
+            applied: >-
+              {{
+                (
+                  uplink_attachment_result is defined
+                  and uplink_attachment_result.trace_id is defined
+                ) | bool
+              }}
+            onboarding_context_available: "{{ (onboarding_fi_model | length > 0) | bool }}"
+          switch_profile_policy_attachment:
+            applied: "{{ (switch_profile_network_policy_attach_results is defined) | bool }}"
+            switch_profiles:
+              - "{{ deployment_name }}-A"
+              - "{{ deployment_name }}-B"
+          switch_profile_deploy:
+            applied: "{{ (switch_profile_network_intent_deploy_results is defined) | bool }}"
+            enabled: "{{ deploy_network_intent_changes | default('true') | bool }}"
+            switch_profiles: "{{ switch_profiles_requiring_deploy | default([]) | map(attribute='switch_profile_name') | list }}"
+            waited_switch_profiles: "{{ switch_profiles_requiring_wait | default([]) | map(attribute='switch_profile_name') | list }}"
+            final_states: >-
+              {%- set out = [] -%}
+              {%- for result in switch_profile_network_intent_deploy_wait_results.results | default([]) -%}
+              {%- set _ = out.append({
+                    'name': result.api_response.Name | default(result.item.switch_profile_name),
+                    'config_state': result.api_response.ConfigContext.ConfigState | default(''),
+                    'config_change_state': result.api_response.ConfigChangeContext.ConfigChangeState | default(''),
+                    'running_workflow_count': result.api_response.RunningWorkflows | default([]) | length
+                  }) -%}
+              {%- endfor -%}
+              {{ out }}
+          trace_ids:
+            multicast_policy: "{{ [multicast_policy_result.trace_id] if (multicast_policy_result is defined and multicast_policy_result.trace_id is defined) else [] }}"
+            vlan_policy: "{{ [vlan_policy_result.trace_id] if (vlan_policy_result is defined and vlan_policy_result.trace_id is defined) else [] }}"
+            ethernet_network_groups: "{{ ethernet_network_group_policy_results.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+            uplink_attachment: "{{ [uplink_attachment_result.trace_id] if (uplink_attachment_result is defined and uplink_attachment_result.trace_id is defined) else [] }}"
+            switch_profile_policy_attachment: "{{ switch_profile_network_policy_attach_results.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+            switch_profile_deploy: "{{ switch_profile_network_intent_deploy_results.results | default([]) | selectattr('trace_id', 'defined') | map(attribute='trace_id') | reject('equalto', None) | list }}"
+      tags: [always, summary]
+
+    - name: Export outputs to Torque
+      torque.collections.export_torque_outputs:
+        outputs:
+          validations_passed: true
+          solution_intent_resolved: "{{ resolved_intent_name }}"
+          network_intent_payload_json: "{{ network_intent_payload | to_json }}"
+          onboarding_context_json: "{{ onboarding_context | to_json }}"
+          intersight_resource_plan_json: "{{ network_intent_payload.intersight_resource_plan | to_json }}"
+          vlans_json: "{{ effective_vlans | to_json }}"
+          vlan_groups_json: "{{ effective_vlan_groups | to_json }}"
+          uplink_profiles_json: "{{ effective_uplink_profiles | to_json }}"
+          vlan_policy_vlans_json: "{{ vlan_policy_vlans | to_json }}"
+          ethernet_network_group_policies_json: "{{ ethernet_network_group_policies | to_json }}"
+          network_intent_tac_handoff_json: "{{ network_intent_tac_handoff | to_json }}"
+          intersight_trace_ids_json: "{{ network_intent_tac_handoff.trace_ids | default({}) | to_json }}"
+      delegate_to: localhost
+      run_once: true
+      tags: always
+      ignore_errors: true

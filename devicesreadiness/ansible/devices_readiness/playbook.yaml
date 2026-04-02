@@ -1,0 +1,235 @@
+---
+- name: Validate device readiness in Cisco Intersight
+  hosts: "{{ group | default('localhost') }}"
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+
+  vars:
+    default_category_rules_json: |
+      {
+        "Blade": {
+          "resource_path": "/compute/PhysicalSummaries",
+          "serial_field": "Serial",
+          "discovery_field": "Lifecycle",
+          "allowed_discovery_states": ["Active"]
+        },
+        "Rack": {
+          "resource_path": "/compute/PhysicalSummaries",
+          "serial_field": "Serial",
+          "discovery_field": "ManagementMode",
+          "allowed_discovery_states": ["IMM", "IntersightStandalone"]
+        },
+        "Chassis": {
+          "resource_path": "/equipment/Chasses",
+          "serial_field": "Serial",
+          "discovery_field": "Serial",
+          "allowed_discovery_states": ["__present__"]
+        },
+        "FabricInterconnect": {
+          "resource_path": "/network/Elements",
+          "serial_field": "Serial",
+          "discovery_field": "Operability",
+          "allowed_discovery_states": ["online"],
+          "pair_validation": true
+        }
+      }
+
+  pre_tasks:
+    - name: Install shared Python requirements
+      ansible.builtin.pip:
+        requirements: "{{ playbook_dir }}/../requirements.txt"
+      tags: [always, precheck]
+
+    - name: Normalize wait and polling inputs
+      ansible.builtin.set_fact:
+        wait_for_readiness_normalized: "{{ (wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes'] }}"
+        readiness_poll_interval_normalized: "{{ readiness_poll_interval | default(30) | int }}"
+        readiness_max_attempts_normalized: "{{ ((readiness_max_attempts | default(20)) if ((wait_for_readiness | default('false') | string | lower) in ['true', '1', 'yes']) else 1) | int }}"
+      changed_when: false
+      tags: [always, validate, precheck]
+
+    - name: Validate required credential inputs
+      ansible.builtin.assert:
+        that:
+          - api_key_id is defined
+          - api_key_id | string | trim | length > 0
+          - api_private_key is defined
+          - api_private_key | string | trim | length > 0
+        fail_msg: >-
+          api_key_id and api_private_key are required.
+      changed_when: false
+      tags: [always, validate, precheck]
+
+    - name: Validate device payload input presence
+      ansible.builtin.assert:
+        that:
+          - devices_json is defined
+          - (
+              (devices_json is string and (devices_json | trim | length > 0))
+              or
+              (devices_json is mapping)
+            )
+        fail_msg: >-
+          Provide devices_json as either a JSON string or a parsed mapping.
+      changed_when: false
+      tags: [always, validate, precheck]
+
+    - name: Validate wait configuration inputs
+      ansible.builtin.assert:
+        that:
+          - (readiness_max_attempts_normalized | int) > 0
+          - (readiness_poll_interval_normalized | int) >= 0
+        fail_msg: >-
+          readiness_max_attempts must be greater than 0 and readiness_poll_interval must be 0 or greater.
+      changed_when: false
+      tags: [always, validate, precheck]
+
+    - name: Parse requested input payloads
+      ansible.builtin.set_fact:
+        devices_payload: "{{ (devices_json | from_json) if (devices_json is string) else devices_json }}"
+        category_rules: "{{ default_category_rules_json | from_json }}"
+      changed_when: false
+      tags: [always, validate, precheck]
+
+    - name: Validate parsed devices payload shape
+      ansible.builtin.assert:
+        that:
+          - devices_payload is mapping
+          - devices_payload.devices is defined
+          - devices_payload.devices is iterable
+        fail_msg: >-
+          devices_json must resolve to a mapping with a top-level devices list.
+      changed_when: false
+      tags: [always, validate, precheck]
+
+    - name: Normalize input payload into requested device batches
+      ansible.builtin.set_fact:
+        requested_devices: "{{ normalized_requested_devices }}"
+      vars:
+        normalized_requested_devices: >-
+          {%- set result = [] -%}
+          {%- for device in devices_payload.devices | default([]) -%}
+            {%- if device.category == 'FabricInterconnectPair' -%}
+              {%- set _ = result.append({
+                'category': 'FabricInterconnect',
+                'serial_numbers': device.serials | default([]),
+                'input_category': device.category
+              }) -%}
+            {%- else -%}
+              {%- set _ = result.append({
+                'category': device.category,
+                'serial_numbers': [device.serial],
+                'input_category': device.category
+              }) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+      changed_when: false
+      tags: [always, validate, precheck]
+
+    - name: Validate normalized requested devices
+      ansible.builtin.assert:
+        that:
+          - item.category is defined
+          - item.serial_numbers is defined
+          - item.serial_numbers is iterable
+          - item.serial_numbers | length > 0
+          - item.category in category_rules
+          - item.serial_numbers | map('string') | map('trim') | reject('equalto', '') | list | length == item.serial_numbers | length
+          - (item.input_category != 'FabricInterconnectPair') or (item.serial_numbers | length == 2)
+        fail_msg: >-
+          Invalid normalized device entry {{ item | to_nice_json }}.
+          Each entry must include a supported category and one or more serial numbers.
+          FabricInterconnectPair entries must contain exactly two serials.
+      loop: "{{ requested_devices }}"
+      loop_control:
+        label: "{{ item.input_category | default(item.category | default('unknown')) }}"
+      changed_when: false
+      tags: [always, validate, precheck]
+
+  tasks:
+    - name: Build request batches per category
+      ansible.builtin.set_fact:
+        device_batches: "{{ (device_batches | default([])) + [batch_entry] }}"
+      vars:
+        serial_filter_terms: >-
+          {%- set terms = [] -%}
+          {%- for serial_number in item.serial_numbers -%}
+            {%- set _ = terms.append(category_rules[item.category].serial_field ~ " eq '" ~ serial_number ~ "'") -%}
+          {%- endfor -%}
+          {{ terms }}
+        batch_entry:
+          category: "{{ item.category }}"
+          serial_numbers: "{{ item.serial_numbers }}"
+          rule: "{{ category_rules[item.category] }}"
+          serial_filter: "{{ serial_filter_terms | join(' or ') }}"
+      loop: "{{ requested_devices }}"
+      loop_control:
+        label: "{{ item.category }}"
+      tags: [validate, configure, verify]
+
+    - name: Initialize readiness polling facts
+      ansible.builtin.set_fact:
+        readiness_completed: false
+        readiness_attempts_executed: 0
+        readiness_last_attempt: 0
+        readiness_summary:
+          requested_count: "{{ requested_devices | map(attribute='serial_numbers') | map('length') | sum }}"
+          present_count: 0
+          missing_count: "{{ requested_devices | map(attribute='serial_numbers') | map('length') | sum }}"
+          not_ready_count: 0
+          present_devices: []
+          missing_devices: []
+          not_ready_devices: []
+          success: false
+          wait_for_readiness: "{{ wait_for_readiness_normalized }}"
+          max_attempts: "{{ readiness_max_attempts_normalized }}"
+          attempts_executed: 0
+          last_attempt: 0
+      changed_when: false
+      tags: [verify, configure]
+
+    - name: Run readiness checks until success or attempt limit
+      ansible.builtin.include_tasks: tasks/check_readiness_pass.yaml
+      loop: "{{ range(1, (readiness_max_attempts_normalized | int) + 1) | list }}"
+      loop_control:
+        label: "attempt {{ item }}"
+      vars:
+        readiness_attempt_number: "{{ item }}"
+      when: not (readiness_completed | default(false))
+      tags: [configure, verify]
+
+    - name: Expose final readiness result lists
+      ansible.builtin.set_fact:
+        missing_devices: "{{ readiness_summary.missing_devices | default([]) }}"
+        not_ready_devices: "{{ readiness_summary.not_ready_devices | default([]) }}"
+        present_devices: "{{ readiness_summary.present_devices | default([]) }}"
+      changed_when: false
+      tags: [verify, outputs]
+
+    - name: Export outputs to Torque
+      torque.collections.export_torque_outputs:
+        outputs:
+          readiness_summary_json: "{{ readiness_summary | to_json }}"
+          readiness_success: "{{ readiness_summary.success | ternary('true', 'false') }}"
+          missing_devices_json: "{{ missing_devices | to_json }}"
+          not_ready_devices_json: "{{ not_ready_devices | to_json }}"
+      delegate_to: localhost
+      run_once: true
+      tags: always
+      ignore_errors: true
+
+  post_tasks:
+    - name: Assert readiness verification success
+      ansible.builtin.assert:
+        that:
+          - readiness_summary is defined
+          - readiness_summary.success
+        fail_msg: >-
+          Device readiness validation failed. Missing devices: {{ missing_devices | to_json }}.
+          Not-ready devices: {{ not_ready_devices | to_json }}.
+        success_msg: >-
+          Device readiness validation passed for all requested serial numbers.
+      changed_when: false
+      tags: [always, validate, verify]

@@ -1,0 +1,56 @@
+---
+vlans:
+  - id: 100
+    name: mgmt
+    native_vlan: true
+    auto_allow_on_uplinks: false
+  - id: 110
+    name: vmotion
+    auto_allow_on_uplinks: false
+  - id: 120
+    name: storage-nfs
+    auto_allow_on_uplinks: false
+  - id: 130
+    name: tenant-a
+    auto_allow_on_uplinks: false
+vlan_groups:
+  - name: flexpod-core
+    vlans: [110, 120, 130]
+global_settings:
+  uplink_mode: standard
+  port_policy_defaults:
+    uplink_ports:
+      role: ethernet-uplink
+      speed: 100G
+      admin_state: enabled
+    server_ports:
+      role: server
+      speed: 25G
+      fec: auto
+  network_control:
+    cdp_enabled: true
+    lldp_enabled: true
+    udld: alert
+  policy_attachments:
+    ethernet_network_control_policy: flexpod-eth-ncp
+    ethernet_qos_policy: flexpod-eth-qos
+    flow_control_policy: flexpod-flow-control
+uplink_profiles:
+  - name: fabric-a-core
+    fabric: A
+    role: ethernet-uplink
+    target_ports:
+      - "1/33-1/34"
+    vlan_groups:
+      - flexpod-core
+    native_vlan: 100
+    admin_state: enabled
+  - name: fabric-b-core
+    fabric: B
+    role: ethernet-uplink
+    target_ports:
+      - "1/35-1/36"
+    vlan_groups:
+      - flexpod-core
+    native_vlan: 100
+    admin_state: enabled

@@ -1,0 +1,34 @@
+---
+- name: Bootstrap required Ansible collections for domain profile workflows
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Install required Python packages for Intersight workflows
+      ansible.builtin.pip:
+        requirements: "{{ playbook_dir }}/../../../infraonboarding/ansible/requirements.txt"
+        executable: pip3
+      register: python_requirements_result
+
+    - name: Show installed Python package summary
+      ansible.builtin.debug:
+        msg: "{{ python_requirements_result.stdout_lines | default([]) }}"
+
+    - name: Install required Ansible collections from shared requirements
+      ansible.builtin.command:
+        argv:
+          - ansible-galaxy
+          - collection
+          - install
+          - -r
+          - "{{ playbook_dir }}/../requirements.yaml"
+          - --force
+      register: collection_install_result
+      changed_when: >-
+        'Installing' in (collection_install_result.stdout | default(''))
+        or 'was installed successfully' in (collection_install_result.stdout | default(''))
+
+    - name: Show installed collection summary
+      ansible.builtin.debug:
+        msg: "{{ collection_install_result.stdout_lines | default([]) }}"

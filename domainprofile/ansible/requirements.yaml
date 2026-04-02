@@ -1,0 +1,4 @@
+---
+collections:
+  - name: cisco.intersight
+  - name: torque.collections
