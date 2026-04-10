@@ -1,0 +1,9 @@
+---
+- name: No-op teardown for create-and-deploy-rack-server-profile
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Report no-op teardown
+      ansible.builtin.debug:
+        msg: "create-and-deploy-rack-server-profile has no destructive teardown action"

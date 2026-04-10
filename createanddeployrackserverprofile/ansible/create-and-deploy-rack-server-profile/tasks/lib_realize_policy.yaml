@@ -1,0 +1,89 @@
+---
+- name: Build effective policy API body
+  ansible.builtin.set_fact:
+    current_policy_api_body: >-
+      {{
+        {
+          'Name': current_policy_definition.name,
+          'ObjectType': current_policy_definition.object_type,
+          'ClassId': current_policy_definition.class_id
+        }
+        | combine(
+            ({'Description': current_policy_definition.description}
+             if (current_policy_definition.description | string | trim | length > 0)
+             else {}),
+            recursive=True
+          )
+        | combine(
+            (
+              {
+                'Organization': {
+                  'ObjectType': 'organization.Organization',
+                  'ClassId': 'mo.MoRef',
+                  'Moid': organization_moid
+                }
+              }
+              if (current_policy_definition.manage_organization | bool)
+              else {}
+            ),
+            recursive=True
+          )
+        | combine(current_policy_definition.api_body | default({}), recursive=True)
+      }}
+
+- name: Realize policy object when apply mode is enabled
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: "{{ current_policy_definition.resource_path }}"
+    query_params:
+      $filter: "Name eq '{{ current_policy_definition.name }}'"
+      $top: 1
+    api_body: "{{ current_policy_api_body }}"
+  register: current_policy_apply_result
+  when: apply_mode | bool
+
+- name: Look up live policy object
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: "{{ current_policy_definition.resource_path }}"
+    query_params:
+      $filter: "Name eq '{{ current_policy_definition.name }}'"
+      $top: 1
+    return_list: true
+  register: current_policy_lookup_result
+
+- name: Append realized policy result
+  ansible.builtin.set_fact:
+    realized_policy_results: "{{ (realized_policy_results | default([])) + [current_policy_result] }}"
+  vars:
+    current_policy_live_object: "{{ (current_policy_lookup_result.api_response | default([]) | first | default({})) }}"
+    current_policy_result:
+      key: "{{ current_policy_definition.key }}"
+      name: "{{ current_policy_definition.name }}"
+      resource_path: "{{ current_policy_definition.resource_path }}"
+      object_type: "{{ current_policy_definition.object_type }}"
+      attach_to_profile: "{{ current_policy_definition.attach_to_profile | bool }}"
+      moid: "{{ current_policy_live_object.Moid | default('') }}"
+      live_found: "{{ (current_policy_live_object.Moid | default('') | string | trim | length) > 0 }}"
+      changed: "{{ current_policy_apply_result.changed | default(false) | bool }}"
+      status: >-
+        {{
+          'realized'
+          if (apply_mode | bool)
+          else (
+            'validated_existing'
+            if ((current_policy_live_object.Moid | default('') | string | trim | length) > 0)
+            else 'missing_in_live_validation'
+          )
+        }}
+      desired_ref:
+        ObjectType: "{{ current_policy_definition.object_type }}"
+        ClassId: mo.MoRef
+        Moid: "{{ current_policy_live_object.Moid | default('') }}"
+        Name: "{{ current_policy_definition.name }}"

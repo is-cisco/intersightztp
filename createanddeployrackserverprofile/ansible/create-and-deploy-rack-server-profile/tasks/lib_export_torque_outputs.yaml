@@ -1,0 +1,13 @@
+---
+- name: Export rack server profile outputs to Torque
+  torque.collections.export_torque_outputs:
+    outputs:
+      profile_ready: "{{ profile_ready }}"
+      profile_status: "{{ profile_status }}"
+      profile_summary_json: "{{ profile_summary_json }}"
+      profile_result_json: "{{ profile_result_json }}"
+      policy_results_json: "{{ policy_results_json }}"
+      realized_policy_moids_json: "{{ realized_policy_moids_json }}"
+  delegate_to: localhost
+  run_once: true
+  ignore_errors: true

@@ -1,0 +1,162 @@
+spec_version: 2
+description: Focused standalone rack server profile workflow for policy realization, profile reconciliation, and optional deploy
+inputs:
+  agent:
+    type: agent
+    title: Torque Agent
+    description: Torque agent that runs this workflow.
+  api_uri:
+    type: string
+    description: Intersight SaaS or appliance API base URI
+    default: https://intersight.com/api/v1
+  intersight_api_key_id:
+    type: string
+    description: Intersight API key id
+    default: ''
+  intersight_api_private_key:
+    type: string
+    description: Intersight API private key PEM content
+    default: ''
+  organization:
+    type: string
+    description: Intersight organization name for the rack server profile
+  rack_server_json:
+    type: string
+    description: JSON object describing the standalone rack server selector
+    default: '{}'
+  server_profile_json:
+    type: string
+    description: JSON object describing the desired server profile
+    default: '{}'
+  policy_definitions_json:
+    type: string
+    description: JSON array or wrapped object describing the policy objects to realize and attach
+    default: '[]'
+  validation_mode:
+    type: string
+    description: Validation mode for the workflow
+    default: strict
+  execution_intent:
+    type: string
+    description: Execution intent for the workflow
+    default: validate_only
+  wait_for_completion:
+    type: string
+    description: Wait for profile deployment completion in apply mode
+    default: 'true'
+  deployment_poll_interval:
+    type: string
+    description: Poll interval in seconds when waiting for deployment completion
+    default: '30'
+  deployment_timeout_seconds:
+    type: string
+    description: Total timeout in seconds when waiting for deployment completion
+    default: '600'
+grains:
+  prepare_intersight_context:
+    kind: ansible
+    spec:
+      source:
+        store: intersight-fullstack-repo
+        path: ansible/prepare-intersight-context/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      env-vars:
+        - INTERSIGHT_API_KEY_ID: '{{ .inputs.intersight_api_key_id }}'
+        - INTERSIGHT_API_PRIVATE_KEY: '{{ .inputs.intersight_api_private_key }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+              ansible_connection: local
+      inputs:
+        - bootstrap_python_requirements: 'true'
+        - platform_yaml: |
+            platform:
+              intersight:
+                endpoint: {{ .inputs.api_uri }}
+                validate_certs: true
+                credentials:
+                  api_key_id_ref: env://INTERSIGHT_API_KEY_ID
+                  api_private_key_ref: env://INTERSIGHT_API_PRIVATE_KEY
+        - organization: '{{ .inputs.organization }}'
+      outputs:
+        - context_status
+        - org_name
+    on-destroy:
+      - source:
+          store: intersight-fullstack-repo
+          path: ansible/prepare-intersight-context/teardown.yaml
+        inventory-file:
+          localhost:
+            hosts:
+              localhost:
+                ansible_connection: local
+
+  create_and_deploy_rack_server_profile:
+    kind: ansible
+    depends-on: prepare_intersight_context
+    spec:
+      source:
+        store: intersight-fullstack-repo
+        path: ansible/create-and-deploy-rack-server-profile/playbook.yaml
+      command-arguments: -vvv
+      agent:
+        name: '{{ .inputs.agent }}'
+      env-vars:
+        - INTERSIGHT_API_KEY_ID: '{{ .inputs.intersight_api_key_id }}'
+        - INTERSIGHT_API_PRIVATE_KEY: '{{ .inputs.intersight_api_private_key }}'
+      inventory-file:
+        localhost:
+          hosts:
+            localhost:
+              ansible_connection: local
+      inputs:
+        - bootstrap_python_requirements: 'true'
+        - platform_yaml: |
+            platform:
+              intersight:
+                endpoint: {{ .inputs.api_uri }}
+                validate_certs: true
+                credentials:
+                  api_key_id_ref: env://INTERSIGHT_API_KEY_ID
+                  api_private_key_ref: env://INTERSIGHT_API_PRIVATE_KEY
+        - organization: '{{ .grains.prepare_intersight_context.outputs.org_name }}'
+        - rack_server_json: '{{ .inputs.rack_server_json }}'
+        - server_profile_json: '{{ .inputs.server_profile_json }}'
+        - policy_definitions_json: '{{ .inputs.policy_definitions_json }}'
+        - validation_mode: '{{ .inputs.validation_mode }}'
+        - execution_intent: '{{ .inputs.execution_intent }}'
+        - wait_for_completion: '{{ .inputs.wait_for_completion }}'
+        - deployment_poll_interval: '{{ .inputs.deployment_poll_interval }}'
+        - deployment_timeout_seconds: '{{ .inputs.deployment_timeout_seconds }}'
+      outputs:
+        - profile_ready
+        - profile_status
+        - profile_summary_json
+        - profile_result_json
+        - policy_results_json
+        - realized_policy_moids_json
+    on-destroy:
+      - source:
+          store: intersight-fullstack-repo
+          path: ansible/create-and-deploy-rack-server-profile/teardown.yaml
+        inventory-file:
+          localhost:
+            hosts:
+              localhost:
+                ansible_connection: local
+outputs:
+  profile_ready:
+    value: '{{ .grains.create_and_deploy_rack_server_profile.outputs.profile_ready }}'
+  profile_status:
+    value: '{{ .grains.create_and_deploy_rack_server_profile.outputs.profile_status }}'
+  profile_summary_json:
+    value: '{{ .grains.create_and_deploy_rack_server_profile.outputs.profile_summary_json }}'
+  profile_result_json:
+    value: '{{ .grains.create_and_deploy_rack_server_profile.outputs.profile_result_json }}'
+  policy_results_json:
+    value: '{{ .grains.create_and_deploy_rack_server_profile.outputs.policy_results_json }}'
+  realized_policy_moids_json:
+    value: '{{ .grains.create_and_deploy_rack_server_profile.outputs.realized_policy_moids_json }}'

@@ -1,0 +1,25 @@
+---
+- name: Wait for server profile to reach a terminal deployment state
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: /server/Profiles
+    query_params:
+      $filter: "Name eq '{{ desired_server_profile.name }}'"
+      $top: 1
+    return_list: true
+  register: waited_server_profile_lookup_result
+  until: >-
+    (
+      (waited_server_profile_lookup_result.api_response | default([]) | first | default({}))
+      .ConfigContext.ConfigState | default('')
+    ) in ['Associated', 'Failed', 'Inconsistent', 'Out-of-sync']
+  retries: "{{ internal_deployment_retries }}"
+  delay: "{{ internal_deployment_delay }}"
+
+- name: Persist waited server-profile state
+  ansible.builtin.set_fact:
+    current_server_profile_object: "{{ (waited_server_profile_lookup_result.api_response | default([]) | first | default({})) }}"
+    server_profile_current_state: "{{ ((waited_server_profile_lookup_result.api_response | default([]) | first | default({})).ConfigContext.ConfigState | default(server_profile_current_state | default(''))) }}"

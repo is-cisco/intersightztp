@@ -1,0 +1,56 @@
+---
+- name: Validate rack-server selector contract
+  ansible.builtin.assert:
+    that:
+      - rack_server_data is mapping
+      - >
+        (rack_server_data.moid | default('') | string | trim | length > 0)
+        or (rack_server_data.serial | default('') | string | trim | length > 0)
+        or (rack_server_data.name | default('') | string | trim | length > 0)
+    fail_msg: "rack_server_json requires one of rack server moid, serial, or name"
+
+- name: Build rack-server lookup filter
+  ansible.builtin.set_fact:
+    rack_server_lookup_filter: >-
+      {{
+        "Moid eq '%s'" | format(rack_server_data.moid | trim)
+        if (rack_server_data.moid | default('') | string | trim | length > 0)
+        else (
+          "Serial eq '%s'" | format(rack_server_data.serial | trim)
+          if (rack_server_data.serial | default('') | string | trim | length > 0)
+          else "Name eq '%s'" | format(rack_server_data.name | trim)
+        )
+      }}
+
+- name: Look up rack server in Intersight
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: /compute/RackUnits
+    query_params:
+      $filter: "{{ rack_server_lookup_filter }}"
+      $top: 1
+    return_list: true
+  register: rack_server_lookup_result
+
+- name: Validate rack server exists in Intersight
+  ansible.builtin.assert:
+    that:
+      - (rack_server_lookup_result.api_response | default([]) | length) > 0
+    fail_msg: "The requested rack server was not found in Intersight"
+
+- name: Persist resolved rack-server reference
+  ansible.builtin.set_fact:
+    resolved_rack_server: >-
+      {{
+        {
+          'moid': ((rack_server_lookup_result.api_response | default([]) | first).Moid | default('')),
+          'name': ((rack_server_lookup_result.api_response | default([]) | first).Name | default('')),
+          'serial': ((rack_server_lookup_result.api_response | default([]) | first).Serial | default('')),
+          'model': ((rack_server_lookup_result.api_response | default([]) | first).Model | default('')),
+          'object_type': (((rack_server_lookup_result.api_response | default([]) | first).ObjectType | default('compute.RackUnit'))),
+          'management_mode': ((rack_server_lookup_result.api_response | default([]) | first).ManagementMode | default(''))
+        }
+      }}

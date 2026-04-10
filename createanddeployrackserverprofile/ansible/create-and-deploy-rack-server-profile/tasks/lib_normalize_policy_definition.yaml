@@ -1,0 +1,24 @@
+---
+- name: Validate policy definition contract
+  ansible.builtin.assert:
+    that:
+      - current_policy_definition is mapping
+      - current_policy_definition.name | default('') | string | trim | length > 0
+      - current_policy_definition.resource_path | default('') | string | trim | length > 0
+      - current_policy_definition.object_type | default('') | string | trim | length > 0
+    fail_msg: "Each policy definition requires name, resource_path, and object_type"
+
+- name: Append normalized policy definition
+  ansible.builtin.set_fact:
+    normalized_policy_definitions: "{{ (normalized_policy_definitions | default([])) + [normalized_policy_definition] }}"
+  vars:
+    normalized_policy_definition:
+      key: "{{ current_policy_definition.key | default(current_policy_definition.name) }}"
+      name: "{{ current_policy_definition.name }}"
+      description: "{{ current_policy_definition.description | default('') }}"
+      resource_path: "{{ current_policy_definition.resource_path }}"
+      object_type: "{{ current_policy_definition.object_type }}"
+      class_id: "{{ current_policy_definition.class_id | default(current_policy_definition.object_type) }}"
+      attach_to_profile: "{{ current_policy_definition.attach_to_profile | default(true) | bool }}"
+      manage_organization: "{{ current_policy_definition.manage_organization | default(true) | bool }}"
+      api_body: "{{ current_policy_definition.api_body | default({}) }}"

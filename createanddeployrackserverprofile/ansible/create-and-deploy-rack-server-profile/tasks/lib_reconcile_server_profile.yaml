@@ -1,0 +1,139 @@
+---
+- name: Look up current server profile by name
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: /server/Profiles
+    query_params:
+      $filter: "Name eq '{{ desired_server_profile.name }}'"
+      $top: 1
+    return_list: true
+  register: current_server_profile_lookup_result
+
+- name: Capture current server profile object
+  ansible.builtin.set_fact:
+    current_server_profile_object: "{{ (current_server_profile_lookup_result.api_response | default([]) | first | default({})) }}"
+
+- name: Merge desired profile policy bucket with current policy bucket
+  intersight_policy_bucket_merge:
+    existing_bucket: "{{ current_server_profile_object.PolicyBucket | default([]) }}"
+    desired_bucket: "{{ desired_policy_attachment_refs | default([]) }}"
+  register: merged_policy_bucket_result
+
+- name: Build desired server profile API body
+  ansible.builtin.set_fact:
+    desired_server_profile_api_body: >-
+      {{
+        {
+          'Name': desired_server_profile.name,
+          'ObjectType': 'server.Profile',
+          'ClassId': 'server.Profile',
+          'TargetPlatform': desired_server_profile.target_platform,
+          'ServerAssignmentMode': desired_server_profile.server_assignment_mode,
+          'UuidAddressType': desired_server_profile.uuid_address_type,
+          'AssignedServer': {
+            'ObjectType': resolved_rack_server.object_type,
+            'ClassId': 'mo.MoRef',
+            'Moid': resolved_rack_server.moid
+          },
+          'Organization': {
+            'ObjectType': 'organization.Organization',
+            'ClassId': 'mo.MoRef',
+            'Moid': organization_moid
+          },
+          'PolicyBucket': merged_policy_bucket_result.merged_bucket
+        }
+        | combine(
+            ({'Description': desired_server_profile.description}
+             if (desired_server_profile.description | string | trim | length > 0)
+             else {}),
+            recursive=True
+          )
+        | combine(
+            ({'Tags': desired_server_profile.tags}
+             if ((desired_server_profile.tags | default([])) | length > 0)
+             else {}),
+            recursive=True
+          )
+        | combine(
+            ({'UserLabel': desired_server_profile.user_label}
+             if (desired_server_profile.user_label | default('') | string | trim | length > 0)
+             else {}),
+            recursive=True
+          )
+        | combine(desired_server_profile.settings | default({}), recursive=True)
+        | combine(desired_server_profile.api_body | default({}), recursive=True)
+      }}
+
+- name: Create or reconcile server profile when apply mode is enabled
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: /server/Profiles
+    query_params:
+      $filter: "Name eq '{{ desired_server_profile.name }}'"
+      $top: 1
+    api_body: "{{ desired_server_profile_api_body }}"
+  register: server_profile_realization_result
+  when: apply_mode | bool
+
+- name: Look up server profile after reconciliation
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: /server/Profiles
+    query_params:
+      $filter: "Name eq '{{ desired_server_profile.name }}'"
+      $top: 1
+    return_list: true
+  register: realized_server_profile_lookup_result
+
+- name: Persist realized server profile state
+  ansible.builtin.set_fact:
+    current_server_profile_object: "{{ (realized_server_profile_lookup_result.api_response | default([]) | first | default({})) }}"
+    server_profile_current_state: "{{ ((realized_server_profile_lookup_result.api_response | default([]) | first | default({})).ConfigContext.ConfigState | default('Not-assigned')) }}"
+    profile_deploy_needed: >-
+      {{
+        (
+          ((realized_server_profile_lookup_result.api_response | default([]) | first | default({})).ConfigContext.ConfigState | default('Not-assigned'))
+          in ['Pending-changes', 'Not-assigned', 'Out-of-sync', 'Assigned']
+        )
+        or
+        (
+          ((realized_server_profile_lookup_result.api_response | default([]) | first | default({})).ConfigChanges | default([]) | length) > 0
+        )
+      }}
+
+- name: Build deploy request body for server profile
+  ansible.builtin.set_fact:
+    desired_server_profile_deploy_body: >-
+      {{
+        desired_server_profile_api_body
+        | combine(
+            {'Action': desired_server_profile.deploy_action | default('ConfigChange')},
+            recursive=True
+          )
+        | combine(desired_server_profile.deploy_api_body | default({}), recursive=True)
+      }}
+
+- name: Trigger server-profile deployment when changes are pending
+  cisco.intersight.intersight_rest_api:
+    api_private_key: "{{ resolved_api_private_key }}"
+    api_key_id: "{{ resolved_api_key_id }}"
+    api_uri: "{{ normalized_intersight_endpoint }}"
+    validate_certs: "{{ profile_validate_certs }}"
+    resource_path: /server/Profiles
+    query_params:
+      $filter: "Name eq '{{ desired_server_profile.name }}'"
+      $top: 1
+    api_body: "{{ desired_server_profile_deploy_body }}"
+  register: server_profile_deploy_result
+  when:
+    - apply_mode | bool
+    - profile_deploy_needed | bool
