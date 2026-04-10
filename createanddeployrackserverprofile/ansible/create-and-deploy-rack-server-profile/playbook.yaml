@@ -12,7 +12,27 @@
     platform_data: "{{ platform_root.platform | default(platform_root) }}"
     placement_root: "{{ (placement_yaml | from_yaml) if (placement_yaml | default('') | string | trim | length > 0) else {} }}"
     placement_data: "{{ placement_root.placement | default(placement_root) }}"
-    rack_server_input: "{{ rack_server_json | default('{}') }}"
+    flat_intersight_api_uri: "{{ INTERSIGHT_API_URI | default(lookup('ansible.builtin.env', 'INTERSIGHT_API_URI'), true) | string | trim }}"
+    flat_intersight_api_key_id: "{{ INTERSIGHT_API_KEY_ID | default(lookup('ansible.builtin.env', 'INTERSIGHT_API_KEY_ID'), true) | string | trim }}"
+    flat_intersight_api_private_key: "{{ INTERSIGHT_API_PRIVATE_KEY | default(lookup('ansible.builtin.env', 'INTERSIGHT_API_PRIVATE_KEY'), true) | string }}"
+    flat_intersight_organization_primary: "{{ INTERSIGHT_ORGANIZATION | default(lookup('ansible.builtin.env', 'INTERSIGHT_ORGANIZATION'), true) | string | trim }}"
+    flat_intersight_organization_secondary: "{{ INTERSIGHT_ORG | default(lookup('ansible.builtin.env', 'INTERSIGHT_ORG'), true) | string | trim }}"
+    flat_mgmt_server_name: "{{ MGMT_SERVER_NAME | default(lookup('ansible.builtin.env', 'MGMT_SERVER_NAME'), true) | string | trim }}"
+    flat_mgmt_server_profile_name: "{{ MGMT_SERVER_PROFILE_NAME | default(lookup('ansible.builtin.env', 'MGMT_SERVER_PROFILE_NAME'), true) | string | trim }}"
+    flat_mgmt_server_serial: "{{ MGMT_SERVER_SERIAL | default(lookup('ansible.builtin.env', 'MGMT_SERVER_SERIAL'), true) | string | trim }}"
+    flat_mgmt_server_moid: "{{ MGMT_SERVER_MOID | default(lookup('ansible.builtin.env', 'MGMT_SERVER_MOID'), true) | string | trim }}"
+    flat_mgmt_server_status: "{{ MGMT_SERVER_STATUS | default(lookup('ansible.builtin.env', 'MGMT_SERVER_STATUS'), true) | string | trim }}"
+    flat_mgmt_server_model: "{{ MGMT_SERVER_SERVER_MODEL | default(lookup('ansible.builtin.env', 'MGMT_SERVER_SERVER_MODEL'), true) | string | trim }}"
+    flat_mgmt_server_ip_address: "{{ MGMT_SERVER_IP_ADDRESS | default(lookup('ansible.builtin.env', 'MGMT_SERVER_IP_ADDRESS'), true) | string | trim }}"
+    flat_mgmt_server_subnet_mask: "{{ MGMT_SERVER_SUBNET_MASK | default(lookup('ansible.builtin.env', 'MGMT_SERVER_SUBNET_MASK'), true) | string | trim }}"
+    flat_mgmt_server_gateway: "{{ MGMT_SERVER_GATEWAY | default(lookup('ansible.builtin.env', 'MGMT_SERVER_GATEWAY'), true) | string | trim }}"
+    flat_mgmt_server_dns_server: "{{ MGMT_SERVER_DNS_SERVER | default(lookup('ansible.builtin.env', 'MGMT_SERVER_DNS_SERVER'), true) | string | trim }}"
+    flat_mgmt_server_http_proxy: "{{ MGMT_SERVER_HTTP_PROXY | default(lookup('ansible.builtin.env', 'MGMT_SERVER_HTTP_PROXY'), true) | string | trim }}"
+    flat_mgmt_server_https_proxy: "{{ MGMT_SERVER_HTTPS_PROXY | default(lookup('ansible.builtin.env', 'MGMT_SERVER_HTTPS_PROXY'), true) | string | trim }}"
+    flat_mgmt_server_no_proxy: "{{ MGMT_SERVER_NO_PROXY | default(lookup('ansible.builtin.env', 'MGMT_SERVER_NO_PROXY'), true) | string | trim }}"
+    flat_mgmt_server_hostname: "{{ MGMT_SERVER_HOSTNAME | default(lookup('ansible.builtin.env', 'MGMT_SERVER_HOSTNAME'), true) | string | trim }}"
+    flat_mgmt_server_ntp_servers: "{{ MGMT_SERVER_NTP_SERVERS | default(lookup('ansible.builtin.env', 'MGMT_SERVER_NTP_SERVERS'), true) | string | trim }}"
+    rack_server_input: "{{ rack_server_json | default('') }}"
     rack_server_root: >-
       {{
         rack_server_input
@@ -23,8 +43,22 @@
           else {}
         )
       }}
-    rack_server_data: "{{ rack_server_root.rack_server | default(rack_server_root) }}"
-    server_profile_input: "{{ server_profile_json | default('{}') }}"
+    structured_rack_server_data: "{{ rack_server_root.rack_server | default(rack_server_root) }}"
+    flat_rack_server_data:
+      name: "{{ flat_mgmt_server_name }}"
+      serial: "{{ flat_mgmt_server_serial }}"
+      moid: "{{ flat_mgmt_server_moid }}"
+      mgmt_ip: "{{ flat_mgmt_server_ip_address }}"
+      model: "{{ flat_mgmt_server_model }}"
+      hostname: "{{ flat_mgmt_server_hostname }}"
+      status: "{{ flat_mgmt_server_status }}"
+    rack_server_data: >-
+      {{
+        structured_rack_server_data
+        if (structured_rack_server_data | length > 0)
+        else flat_rack_server_data
+      }}
+    server_profile_input: "{{ server_profile_json | default('') }}"
     server_profile_root: >-
       {{
         server_profile_input
@@ -35,8 +69,33 @@
           else {}
         )
       }}
-    desired_server_profile: "{{ server_profile_root.server_profile | default(server_profile_root) }}"
-    policy_definitions_input: "{{ policy_definitions_json | default('[]') }}"
+    structured_server_profile_data: "{{ server_profile_root.server_profile | default(server_profile_root) }}"
+    flat_server_profile_name: "{{ flat_mgmt_server_profile_name if (flat_mgmt_server_profile_name | length > 0) else flat_mgmt_server_name }}"
+    flat_server_profile_data:
+      name: "{{ flat_server_profile_name }}"
+      description: >-
+        {{
+          'Rack server profile for %s' | format(flat_mgmt_server_name)
+          if (flat_mgmt_server_name | length > 0)
+          else 'Rack server profile'
+        }}
+      target_platform: Standalone
+      uuid_address_type: NONE
+      server_assignment_mode: Static
+      deploy_action: ConfigChange
+      tags:
+        - Key: managed-by
+          Value: ansible
+        - Key: source
+          Value: flat-mgmt-server-input
+      user_label: "{{ flat_mgmt_server_hostname }}"
+    desired_server_profile: >-
+      {{
+        structured_server_profile_data
+        if (structured_server_profile_data | length > 0)
+        else flat_server_profile_data
+      }}
+    policy_definitions_input: "{{ policy_definitions_json | default('') }}"
     policy_definitions_root: >-
       {{
         policy_definitions_input
@@ -48,19 +107,32 @@
         )
       }}
     policy_definitions_data: "{{ policy_definitions_root.policies | default(policy_definitions_root) }}"
-    raw_intersight_endpoint: "{{ platform_data.intersight.endpoint | default('https://intersight.com/api/v1') }}"
+    raw_intersight_endpoint: "{{ platform_data.intersight.endpoint | default(flat_intersight_api_uri if (flat_intersight_api_uri | length > 0) else 'https://intersight.com/api/v1') }}"
     normalized_intersight_endpoint: >-
       {{
         raw_intersight_endpoint
         if ((raw_intersight_endpoint | string | regex_search('/api/v1/?$')) is not none)
         else ((raw_intersight_endpoint | string | regex_replace('/+$', '')) ~ '/api/v1')
       }}
-    intersight_api_key_id_direct: "{{ platform_data.intersight.credentials.api_key_id | default('') | string | trim }}"
-    intersight_api_private_key_direct: "{{ platform_data.intersight.credentials.api_private_key | default('') | string }}"
+    intersight_api_key_id_direct: "{{ platform_data.intersight.credentials.api_key_id | default(flat_intersight_api_key_id) | string | trim }}"
+    intersight_api_private_key_direct: "{{ platform_data.intersight.credentials.api_private_key | default(flat_intersight_api_private_key) | string }}"
     intersight_api_key_id_ref: "{{ platform_data.intersight.credentials.api_key_id_ref | default('') }}"
     intersight_api_private_key_ref: "{{ platform_data.intersight.credentials.api_private_key_ref | default('') }}"
     direct_organization: "{{ organization | default('') | string | trim }}"
-    requested_organization: "{{ direct_organization if (direct_organization | length > 0) else (placement_data.intersight.organization | default('') | string | trim) }}"
+    requested_organization: >-
+      {{
+        direct_organization
+        if (direct_organization | length > 0)
+        else (
+          (placement_data.intersight.organization | default('') | string | trim)
+          if (placement_data.intersight.organization | default('') | string | trim | length > 0)
+          else (
+            flat_intersight_organization_primary
+            if (flat_intersight_organization_primary | length > 0)
+            else flat_intersight_organization_secondary
+          )
+        )
+      }}
     profile_validate_certs: "{{ platform_data.intersight.validate_certs | default(true) | bool }}"
     validation_mode_normalized: "{{ validation_mode | default('strict') | string | trim | lower }}"
     execution_intent_normalized: "{{ execution_intent | default('validate_only') | string | trim | lower }}"
@@ -131,12 +203,16 @@
         that:
           - rack_server_data is mapping
           - desired_server_profile is mapping
+          - >
+            (rack_server_data.moid | default('') | string | trim | length > 0)
+            or (rack_server_data.serial | default('') | string | trim | length > 0)
+            or (rack_server_data.name | default('') | string | trim | length > 0)
           - desired_server_profile.name | default('') | string | trim | length > 0
           - policy_definitions_data is sequence
           - validation_mode_normalized in ['strict', 'live']
           - execution_intent_normalized in ['validate_only', 'apply', 'deploy', 'provision']
           - requested_organization | string | trim | length > 0
-        fail_msg: "create-and-deploy-rack-server-profile requires rack_server_json, server_profile_json, policy_definitions_json as a list, and an organization"
+        fail_msg: "create-and-deploy-rack-server-profile requires either structured rack_server_json/server_profile_json inputs or flat MGMT_SERVER_* inputs, plus an organization"
       tags:
         - always
         - validate
